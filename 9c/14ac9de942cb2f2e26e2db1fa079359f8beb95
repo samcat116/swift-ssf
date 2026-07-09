@@ -1,0 +1,29 @@
+Sources/SwiftSSF/JWT/JWTProcessor.swift
+  s_0efccfb3adc40d::t_150ecbba1d5b2f 99,106
+  s_0efccfb3adc40d::t_56a6e502d27530 15-27
+  s_0efccfb3adc40d::t_996e0a13defd68 78
+  s_0efccfb3adc40d::t_a310daf2e3bc43 134,136-207
+  s_0efccfb3adc40d::t_91fea4cef6b443 135
+Sources/SwiftSSF/SSFReceiver.swift
+  s_0efccfb3adc40d::t_4d6531dad1f90d 41,50
+  s_0efccfb3adc40d::t_0322ffd6ee689a 20-22
+  s_0efccfb3adc40d::t_b847a8fadcc4ce 376
+Tests/SwiftSSFTests/JWTProcessorTests.swift
+  s_0efccfb3adc40d::t_a2d8ab237cee79 298-472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9c14ac9de942cb2f2e26e2db1fa079359f8beb95",
+  "prompts": {},
+  "sessions": {
+    "s_0efccfb3adc40d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5a4394f3-b358-4b89-9955-75f697ad2833",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
