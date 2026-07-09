@@ -1,0 +1,40 @@
+Sources/SwiftSSF/Client/SSFHTTPClient.swift
+  s_99a5a7a0b0598c::t_a94c91f17b9da6 95
+  s_99a5a7a0b0598c::t_7c96a01f68319f 224-227
+  s_99a5a7a0b0598c::t_569bdd419d4a8d 16,24,26,38-44
+  s_99a5a7a0b0598c::t_21664d1f4c4ca7 82
+  s_99a5a7a0b0598c::t_8ea475d64ef8b3 67
+  s_99a5a7a0b0598c::t_ad91bd27f1adb7 45-46
+README.md
+  s_99a5a7a0b0598c::t_40c36c5567435a 54-81
+Tests/SwiftSSFTests/SwiftSSFTests.swift
+  s_99a5a7a0b0598c::t_9783e0290c1aa7 36-58,61-78,83-85
+  s_99a5a7a0b0598c::t_6f20fae07326e7 59-60
+  s_99a5a7a0b0598c::t_1dd34e38cd2784 79-82
+Sources/SwiftSSF/Client/SSFTokenProvider.swift
+  s_99a5a7a0b0598c::t_184774a39fd169 1-52
+Sources/SwiftSSF/SSFReceiver.swift
+  s_99a5a7a0b0598c::t_18aa91dc29e778 11-14,17-23
+  s_99a5a7a0b0598c::t_146449018dd6bd 94-98
+  s_99a5a7a0b0598c::t_db9e0fe1fdb1a5 362,367-382
+  s_99a5a7a0b0598c::t_1cb0a39ae5fd88 47,56
+  s_99a5a7a0b0598c::t_5ac9c3a386a5fa 117-120,123
+  s_99a5a7a0b0598c::t_1d927df2841b60 24
+  s_99a5a7a0b0598c::t_b55a61db628986 383-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d968a5b3eca4a44597cc7b46d7eaccf2440fdc39",
+  "prompts": {},
+  "sessions": {
+    "s_99a5a7a0b0598c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8839f5d1-c9af-475f-9c01-ffccd8b27a01",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
