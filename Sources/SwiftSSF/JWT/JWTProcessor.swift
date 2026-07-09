@@ -12,6 +12,19 @@ public enum JWTVerificationKey: Sendable {
     case rs256(_RSA.Signing.PublicKey)
 }
 
+/// How a SET's `aud` claim is checked against the receiver's expected audiences.
+public enum AudienceValidation: Sendable {
+    /// Accept when the SET's `aud` shares at least one value with the
+    /// expected audiences. Suits receivers known by several identifiers.
+    /// (Default.)
+    case anyOverlap
+
+    /// Require the SET to be addressed to exactly one audience, and that
+    /// audience to be one the receiver answers to. Rejects tokens that also
+    /// name other receivers.
+    case strict
+}
+
 /// JWT processor for parsing and validating Security Event Tokens
 public actor JWTProcessor {
     private let logger = Logger(label: "SwiftSSF.JWTProcessor")
@@ -62,6 +75,7 @@ public actor JWTProcessor {
         _ token: String,
         expectedIssuer: URL? = nil,
         expectedAudience: [String]? = nil,
+        audienceValidation: AudienceValidation = .anyOverlap,
         key: JWTVerificationKey?
     ) throws -> SecurityEventToken {
         let (header, payloadDict) = try parseJWT(token)
@@ -82,17 +96,14 @@ public actor JWTProcessor {
 
         // Validate issuer if expected
         if let expectedIssuer = expectedIssuer {
-            guard payload.iss == expectedIssuer else {
+            guard Self.issuerMatches(payload.iss, expected: expectedIssuer) else {
                 throw SSFError.invalidIssuer(expected: expectedIssuer.absoluteString, actual: payload.iss.absoluteString)
             }
         }
 
         // Validate audience if expected
         if let expectedAudience = expectedAudience {
-            guard let actualAudience = payload.aud,
-                  !Set(expectedAudience).isDisjoint(with: Set(actualAudience)) else {
-                throw SSFError.invalidAudience(expected: expectedAudience, actual: payload.aud)
-            }
+            try Self.validateAudience(payload.aud, expected: expectedAudience, mode: audienceValidation)
         }
 
         // RFC 8417 discourages "exp" in SETs, but if a transmitter includes it,
@@ -119,6 +130,80 @@ public actor JWTProcessor {
         let normalized = typ.lowercased()
         guard normalized == "secevent+jwt" || normalized == "application/secevent+jwt" else {
             throw SSFError.invalidJWT("Unexpected typ header \"\(typ)\"; SETs must use typ \"secevent+jwt\"")
+        }
+    }
+
+    /// Compare a SET's issuer against the expected issuer.
+    ///
+    /// OIDC-style issuer matching is a verbatim string comparison, but the
+    /// original code compared `URL` values, so `https://tr.example.com` and
+    /// `https://tr.example.com/` — and case differences in scheme/host —
+    /// failed even though they identify the same issuer. Try the exact
+    /// comparison first, then fall back to a normalized comparison
+    /// (lowercase scheme/host, default port stripped, trailing slash removed).
+    static func issuerMatches(_ actual: URL, expected: URL) -> Bool {
+        if actual.absoluteString == expected.absoluteString {
+            return true
+        }
+        guard let normalizedActual = normalizedIssuer(actual),
+              let normalizedExpected = normalizedIssuer(expected) else {
+            return false
+        }
+        return normalizedActual == normalizedExpected
+    }
+
+    /// Canonicalize an issuer URL for equivalence comparison. Returns `nil`
+    /// if the URL can't be decomposed.
+    private static func normalizedIssuer(_ url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        let scheme = components.scheme?.lowercased() ?? ""
+        let host = components.host?.lowercased() ?? ""
+
+        var portPart = ""
+        if let port = components.port {
+            let isDefaultPort = (scheme == "https" && port == 443) || (scheme == "http" && port == 80)
+            if !isDefaultPort {
+                portPart = ":\(port)"
+            }
+        }
+
+        var path = components.path
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        if path == "/" {
+            path = ""
+        }
+
+        return "\(scheme)://\(host)\(portPart)\(path)"
+    }
+
+    /// Check a SET's `aud` against the configured expectation.
+    ///
+    /// A SET with no `aud` can't satisfy a configured expectation, so it's
+    /// rejected here; a missing `aud` is only accepted when no expectation is
+    /// configured (in which case this method isn't called).
+    static func validateAudience(_ actual: [String]?, expected: [String], mode: AudienceValidation) throws {
+        guard let actual = actual, !actual.isEmpty else {
+            throw SSFError.invalidAudience(expected: expected, actual: actual)
+        }
+
+        let expectedSet = Set(expected)
+        let actualSet = Set(actual)
+
+        switch mode {
+        case .anyOverlap:
+            guard !expectedSet.isDisjoint(with: actualSet) else {
+                throw SSFError.invalidAudience(expected: expected, actual: actual)
+            }
+        case .strict:
+            // Exactly one audience, and it must be one we answer to.
+            guard actualSet.count == 1, expectedSet.isSuperset(of: actualSet) else {
+                throw SSFError.invalidAudience(expected: expected, actual: actual)
+            }
         }
     }
 

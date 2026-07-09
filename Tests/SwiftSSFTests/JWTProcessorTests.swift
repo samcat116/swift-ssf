@@ -295,6 +295,181 @@ final class JWTProcessorTests: XCTestCase {
         XCTAssertEqual(parsed.payload.aud, ["receiver-1"])
     }
 
+    // MARK: - Issuer normalization
+
+    func testIssuerTrailingSlashAccepted() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        // Token issued as ".../" must match an expectation without the slash.
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://tr.example.com/","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            expectedIssuer: URL(string: "https://tr.example.com")!,
+            key: .es256(privateKey.publicKey)
+        )
+        XCTAssertEqual(parsed.payload.jti, "j1")
+    }
+
+    func testIssuerSchemeAndHostCaseInsensitive() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"HTTPS://TR.EXAMPLE.COM","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            expectedIssuer: URL(string: "https://tr.example.com")!,
+            key: .es256(privateKey.publicKey)
+        )
+        XCTAssertEqual(parsed.payload.jti, "j1")
+    }
+
+    func testIssuerDefaultPortStripped() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://tr.example.com:443/path","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            expectedIssuer: URL(string: "https://tr.example.com/path")!,
+            key: .es256(privateKey.publicKey)
+        )
+        XCTAssertEqual(parsed.payload.jti, "j1")
+    }
+
+    func testIssuerDistinctPathStillRejected() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        // Normalization must not make genuinely different issuers match.
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://tr.example.com/a","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        do {
+            _ = try await processor.parseSecurityEventToken(
+                token,
+                expectedIssuer: URL(string: "https://tr.example.com/b")!,
+                key: .es256(privateKey.publicKey)
+            )
+            XCTFail("Should have rejected a different issuer path")
+        } catch SSFError.invalidIssuer {
+            // Expected
+        }
+    }
+
+    // MARK: - Strict audience validation
+
+    func testStrictAudienceRejectsAdditionalReceivers() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        // A SET addressed to us *and* another receiver must fail strict mode.
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"aud":["r1","r2"],"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        do {
+            _ = try await processor.parseSecurityEventToken(
+                token,
+                expectedAudience: ["r1"],
+                audienceValidation: .strict,
+                key: .es256(privateKey.publicKey)
+            )
+            XCTFail("Should have rejected multi-audience token in strict mode")
+        } catch SSFError.invalidAudience {
+            // Expected
+        }
+
+        // The same token is fine under the default overlap policy.
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            expectedAudience: ["r1"],
+            audienceValidation: .anyOverlap,
+            key: .es256(privateKey.publicKey)
+        )
+        XCTAssertEqual(parsed.payload.aud, ["r1", "r2"])
+    }
+
+    func testStrictAudienceAcceptsSoleMatch() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"aud":["r1"],"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            expectedAudience: ["r1", "r2"],
+            audienceValidation: .strict,
+            key: .es256(privateKey.publicKey)
+        )
+        XCTAssertEqual(parsed.payload.aud, ["r1"])
+    }
+
+    func testMissingAudienceRejectedWhenExpected() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        // No aud at all cannot satisfy a configured expectation.
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        do {
+            _ = try await processor.parseSecurityEventToken(
+                token,
+                expectedAudience: ["r1"],
+                key: .es256(privateKey.publicKey)
+            )
+            XCTFail("Should have rejected missing aud when expectation configured")
+        } catch SSFError.invalidAudience {
+            // Expected
+        }
+    }
+
+    func testMissingAudienceAcceptedWhenNoExpectation() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        // With no expectation configured, a SET without aud is accepted.
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            key: .es256(privateKey.publicKey)
+        )
+        XCTAssertNil(parsed.payload.aud)
+    }
+
     // MARK: - Test helpers
 
     static func makeES256Token(header: String, payload: String, privateKey: P256.Signing.PrivateKey) throws -> String {
