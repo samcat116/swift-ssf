@@ -5,15 +5,15 @@ import Logging
 
 /// Configuration for SSF Receiver
 public struct SSFReceiverConfiguration: Sendable {
-    /// The transmitter's base URL
+    /// The transmitter's issuer URL (used for discovery)
     public let transmitterURL: URL
-    
+
     /// Authentication token for API calls
     public let authToken: String?
-    
+
     /// Expected issuer URL (defaults to transmitterURL)
     public let expectedIssuer: URL?
-    
+
     /// Expected audience identifiers
     public let expectedAudience: [String]?
 
@@ -53,9 +53,21 @@ public struct SSFReceiverConfiguration: Sendable {
 public protocol SSFEventHandler: Sendable {
     /// Handle a received security event
     func handleEvent(_ token: SecurityEventToken) async throws
-    
+
     /// Handle event processing errors
     func handleError(_ error: SSFError, token: SecurityEventToken?) async
+}
+
+/// Result of a single poll request
+public struct PollResult: Sendable {
+    /// Number of SETs successfully processed and acknowledged
+    public let processed: Int
+
+    /// Number of SETs that failed processing (reported via setErrs)
+    public let failed: Int
+
+    /// Whether the transmitter has more events available right now
+    public let moreAvailable: Bool
 }
 
 /// Main SSF Receiver implementation
@@ -65,7 +77,7 @@ public actor SSFReceiver {
     private let jwtProcessor: JWTProcessor
     private let jwksClient: JWKSClient
     private let logger: Logger
-    
+
     private var cachedConfiguration: TransmitterConfiguration?
 
     /// The HTTPClient this receiver created and must shut down; nil when the
@@ -113,116 +125,185 @@ public actor SSFReceiver {
             try await client.shutdown()
         }
     }
-    
-    // MARK: - Stream Management
-    
+
+    // MARK: - Stream Management (SSF 1.0 §8.1.1)
+
     /// Create a new event stream
     public func createStream(
-        audience: [String],
-        eventsRequested: [String],
-        delivery: DeliveryConfiguration,
+        eventsRequested: [String]? = nil,
+        delivery: DeliveryConfiguration? = nil,
         description: String? = nil
-    ) async throws -> EventStream {
+    ) async throws -> StreamConfiguration {
         logger.info("Creating new event stream")
-        
+
         let request = CreateStreamRequest(
-            aud: audience,
             events_requested: eventsRequested,
             delivery: delivery,
             description: description
         )
-        
-        return try await httpClient.createStream(request)
+
+        return try await httpClient.createStream(endpoint: try await endpoint(\.configuration_endpoint, "configuration_endpoint"), request)
     }
-    
-    /// Get an existing stream
-    public func getStream(id: String) async throws -> EventStream {
-        return try await httpClient.getStream(id: id)
+
+    /// Get an existing stream's configuration
+    public func getStream(id: String) async throws -> StreamConfiguration {
+        return try await httpClient.getStream(endpoint: try await endpoint(\.configuration_endpoint, "configuration_endpoint"), id: id)
     }
-    
-    /// Update a stream
+
+    /// List all of this receiver's streams
+    public func listStreams() async throws -> [StreamConfiguration] {
+        return try await httpClient.listStreams(endpoint: try await endpoint(\.configuration_endpoint, "configuration_endpoint"))
+    }
+
+    /// Update parts of a stream (PATCH semantics)
     public func updateStream(
         id: String,
         eventsRequested: [String]? = nil,
         delivery: DeliveryConfiguration? = nil,
-        status: StreamStatus? = nil,
         description: String? = nil
-    ) async throws -> EventStream {
+    ) async throws -> StreamConfiguration {
         let request = UpdateStreamRequest(
+            stream_id: id,
             events_requested: eventsRequested,
             delivery: delivery,
-            status: status,
             description: description
         )
-        
-        return try await httpClient.updateStream(id, request)
+
+        return try await httpClient.updateStream(endpoint: try await endpoint(\.configuration_endpoint, "configuration_endpoint"), request)
     }
-    
+
+    /// Replace a stream's full configuration (PUT semantics)
+    public func replaceStream(_ stream: StreamConfiguration) async throws -> StreamConfiguration {
+        return try await httpClient.replaceStream(endpoint: try await endpoint(\.configuration_endpoint, "configuration_endpoint"), stream)
+    }
+
     /// Delete a stream
     public func deleteStream(id: String) async throws {
         logger.info("Deleting stream \(id)")
-        try await httpClient.deleteStream(id: id)
+        try await httpClient.deleteStream(endpoint: try await endpoint(\.configuration_endpoint, "configuration_endpoint"), id: id)
     }
-    
+
+    // MARK: - Stream Status (SSF 1.0 §8.1.2)
+
     /// Get stream status
-    public func getStreamStatus(id: String) async throws -> StreamStatus {
-        return try await httpClient.getStreamStatus(id: id)
+    public func getStreamStatus(id: String) async throws -> StreamStatusResponse {
+        return try await httpClient.getStreamStatus(endpoint: try await endpoint(\.status_endpoint, "status_endpoint"), id: id)
     }
-    
+
+    /// Update stream status
+    @discardableResult
+    public func setStreamStatus(
+        id: String,
+        status: StreamStatus,
+        reason: String? = nil
+    ) async throws -> StreamStatusResponse {
+        let request = StreamStatusResponse(stream_id: id, status: status, reason: reason)
+        return try await httpClient.setStreamStatus(endpoint: try await endpoint(\.status_endpoint, "status_endpoint"), request)
+    }
+
+    // MARK: - Subjects (SSF 1.0 §8.1.3)
+
     /// Add a subject to a stream
-    public func addSubject(streamId: String, subject: SubjectIdentifier) async throws {
+    public func addSubject(streamId: String, subject: SubjectIdentifier, verified: Bool? = nil) async throws {
         logger.debug("Adding subject to stream \(streamId)")
-        try await httpClient.addSubject(streamId: streamId, subject: subject)
+        let request = AddSubjectRequest(stream_id: streamId, subject: subject, verified: verified)
+        try await httpClient.addSubject(endpoint: try await endpoint(\.add_subject_endpoint, "add_subject_endpoint"), request)
     }
-    
+
     /// Remove a subject from a stream
     public func removeSubject(streamId: String, subject: SubjectIdentifier) async throws {
         logger.debug("Removing subject from stream \(streamId)")
-        try await httpClient.removeSubject(streamId: streamId, subject: subject)
+        let request = RemoveSubjectRequest(stream_id: streamId, subject: subject)
+        try await httpClient.removeSubject(endpoint: try await endpoint(\.remove_subject_endpoint, "remove_subject_endpoint"), request)
     }
-    
-    /// Verify a stream
-    public func verifyStream(id: String, state: String? = nil) async throws -> VerificationResponse {
-        logger.info("Verifying stream \(id)")
-        return try await httpClient.verifyStream(streamId: id, state: state)
+
+    // MARK: - Verification (SSF 1.0 §8.1.4)
+
+    /// Request stream verification. The transmitter responds 204 and delivers
+    /// the result asynchronously as a verification event over the stream,
+    /// echoing `state` for correlation.
+    public func verifyStream(id: String, state: String? = nil) async throws {
+        logger.info("Requesting verification for stream \(id)")
+        let request = VerificationRequest(stream_id: id, state: state)
+        try await httpClient.verifyStream(endpoint: try await endpoint(\.verification_endpoint, "verification_endpoint"), request)
     }
-    
+
     // MARK: - Event Processing
-    
-    /// Poll for events from a stream
+
+    /// Poll a stream's delivery endpoint once (RFC 8936).
+    ///
+    /// Successfully handled SETs are acknowledged (and failures reported via
+    /// setErrs) with a follow-up ack-only request, so a crash between receipt
+    /// and handling means redelivery rather than loss.
+    @discardableResult
     public func pollEvents(
-        streamId: String,
+        endpoint: URL,
         maxEvents: Int = 100,
+        returnImmediately: Bool = true,
         handler: SSFEventHandler
-    ) async throws -> Int {
-        logger.debug("Polling events from stream \(streamId)")
-        
-        let response = try await httpClient.pollEvents(streamId: streamId, maxEvents: maxEvents)
-        var processedEvents = 0
-        var processedEventIds: [String] = []
-        
-        for setToken in response.sets {
+    ) async throws -> PollResult {
+        logger.debug("Polling events from \(endpoint)")
+
+        let response = try await httpClient.pollEvents(endpoint: endpoint, PollRequest(
+            maxEvents: maxEvents,
+            returnImmediately: returnImmediately
+        ))
+
+        var acks: [String] = []
+        var errs: [String: SETErrorStatus] = [:]
+
+        for (jti, setToken) in response.sets {
             do {
                 let securityEventToken = try await parseAndValidateToken(setToken)
                 try await handler.handleEvent(securityEventToken)
-                processedEvents += 1
-                processedEventIds.append(securityEventToken.payload.jti)
+                acks.append(jti)
             } catch {
-                logger.error("Failed to process event: \(error)")
+                logger.error("Failed to process event \(jti): \(error)")
                 let ssfError = error as? SSFError ?? SSFError.unknown(error)
                 await handler.handleError(ssfError, token: nil)
+                errs[jti] = SETErrorStatus(reporting: ssfError)
             }
         }
-        
-        // Acknowledge processed events
-        if !processedEventIds.isEmpty {
-            try await httpClient.acknowledgeEvents(streamId: streamId, eventIds: processedEventIds)
-            logger.debug("Acknowledged \(processedEventIds.count) events")
+
+        // Acknowledge outcomes with an ack-only request (maxEvents: 0)
+        if !acks.isEmpty || !errs.isEmpty {
+            _ = try await httpClient.pollEvents(endpoint: endpoint, PollRequest(
+                maxEvents: 0,
+                returnImmediately: true,
+                ack: acks.isEmpty ? nil : acks,
+                setErrs: errs.isEmpty ? nil : errs
+            ))
+            logger.debug("Acknowledged \(acks.count) events, reported \(errs.count) failures")
         }
-        
-        return processedEvents
+
+        return PollResult(
+            processed: acks.count,
+            failed: errs.count,
+            moreAvailable: response.moreAvailable ?? false
+        )
     }
-    
+
+    /// Poll a stream once, using its configured poll delivery endpoint
+    @discardableResult
+    public func pollEvents(
+        stream: StreamConfiguration,
+        maxEvents: Int = 100,
+        returnImmediately: Bool = true,
+        handler: SSFEventHandler
+    ) async throws -> PollResult {
+        guard let delivery = stream.delivery, delivery.method == .poll,
+              let endpoint = delivery.endpoint_url else {
+            throw SSFError.invalidStreamConfiguration("Stream \(stream.stream_id) has no poll delivery endpoint")
+        }
+
+        return try await pollEvents(
+            endpoint: endpoint,
+            maxEvents: maxEvents,
+            returnImmediately: returnImmediately,
+            handler: handler
+        )
+    }
+
     /// Process a single SET token.
     ///
     /// Throws when validation or handling fails so that delivery layers can
@@ -245,35 +326,41 @@ public actor SSFReceiver {
             throw ssfError
         }
     }
-    
+
     // MARK: - Discovery
-    
+
     /// Get transmitter configuration
     public func getTransmitterConfiguration() async throws -> TransmitterConfiguration {
         if let cached = cachedConfiguration {
             return cached
         }
-        
+
         logger.info("Fetching transmitter configuration")
         let config = try await httpClient.getConfiguration()
         cachedConfiguration = config
         return config
     }
-    
-    /// Get supported events from transmitter
-    public func getSupportedEvents() async throws -> [String] {
-        let config = try await getTransmitterConfiguration()
-        return config.events_supported ?? []
-    }
-    
+
     /// Get supported delivery methods
     public func getSupportedDeliveryMethods() async throws -> [String] {
         let config = try await getTransmitterConfiguration()
-        return config.delivery_methods_supported
+        return config.delivery_methods_supported ?? []
     }
-    
+
     // MARK: - Private Methods
-    
+
+    /// Resolve a management endpoint from transmitter metadata
+    private func endpoint(
+        _ keyPath: KeyPath<TransmitterConfiguration, URL?>,
+        _ name: String
+    ) async throws -> URL {
+        let config = try await getTransmitterConfiguration()
+        guard let url = config[keyPath: keyPath] else {
+            throw SSFError.missingConfiguration("Transmitter metadata has no \(name)")
+        }
+        return url
+    }
+
     private func parseAndValidateToken(_ token: String) async throws -> SecurityEventToken {
         let key = try await validationKey(for: token)
 
@@ -297,7 +384,11 @@ public actor SSFReceiver {
         let (header, _) = try await jwtProcessor.parseJWT(token)
         let config = try await getTransmitterConfiguration()
 
-        return try await jwksClient.verificationKey(forKeyID: header.kid, jwksURI: config.jwks_uri)
+        guard let jwksURI = config.jwks_uri else {
+            throw SSFError.missingConfiguration("Transmitter metadata has no jwks_uri; cannot verify SETs")
+        }
+
+        return try await jwksClient.verificationKey(forKeyID: header.kid, jwksURI: jwksURI)
     }
 
     /// Clear cached data
@@ -313,14 +404,14 @@ public actor SSFReceiver {
 /// Simple logging event handler for development and testing
 public struct LoggingEventHandler: SSFEventHandler {
     private let logger = Logger(label: "SwiftSSF.LoggingEventHandler")
-    
+
     public init() {}
-    
+
     public func handleEvent(_ token: SecurityEventToken) async throws {
         logger.info("Received security event from \(token.payload.iss)")
         logger.debug("Event details: \(token.payload.events)")
     }
-    
+
     public func handleError(_ error: SSFError, token: SecurityEventToken?) async {
         logger.error("Error processing event: \(error.localizedDescription)")
         if let token = token {

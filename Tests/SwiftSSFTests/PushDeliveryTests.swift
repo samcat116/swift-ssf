@@ -135,7 +135,7 @@ final class PushDeliveryTests: XCTestCase {
         XCTAssertEqual(response.status, 400)
         XCTAssertEqual(response.contentType, "application/json")
 
-        let error = try JSONDecoder().decode(PushErrorResponse.self, from: Data(response.body.utf8))
+        let error = try JSONDecoder().decode(SETErrorStatus.self, from: Data(response.body.utf8))
         XCTAssertEqual(error.err, "invalid_request")
         XCTAssertTrue(handler.events.isEmpty)
 
@@ -169,7 +169,7 @@ final class PushDeliveryTests: XCTestCase {
         let response = try await post(port: port, authorization: "Bearer wrong", body: set)
 
         XCTAssertEqual(response.status, 401)
-        let error = try JSONDecoder().decode(PushErrorResponse.self, from: Data(response.body.utf8))
+        let error = try JSONDecoder().decode(SETErrorStatus.self, from: Data(response.body.utf8))
         XCTAssertEqual(error.err, "authentication_failed")
 
         // Regression: the old handler kept processing the SET after sending 401
@@ -205,14 +205,14 @@ final class PushDeliveryTests: XCTestCase {
     }
 
     func testErrorCodeMapping() {
-        XCTAssertEqual(SSFWebhookHandler.errorResponse(for: SSFError.signatureVerificationFailed).err, "invalid_key")
-        XCTAssertEqual(SSFWebhookHandler.errorResponse(for: SSFError.verificationKeyUnavailable("x")).err, "invalid_key")
+        XCTAssertEqual(SETErrorStatus(reporting: SSFError.signatureVerificationFailed).err, "invalid_key")
+        XCTAssertEqual(SETErrorStatus(reporting: SSFError.verificationKeyUnavailable("x")).err, "invalid_key")
         XCTAssertEqual(
-            SSFWebhookHandler.errorResponse(for: SSFError.invalidIssuer(expected: "a", actual: "b")).err,
+            SETErrorStatus(reporting: SSFError.invalidIssuer(expected: "a", actual: "b")).err,
             "invalid_issuer")
         XCTAssertEqual(
-            SSFWebhookHandler.errorResponse(for: SSFError.invalidAudience(expected: ["a"], actual: nil)).err,
+            SETErrorStatus(reporting: SSFError.invalidAudience(expected: ["a"], actual: nil)).err,
             "invalid_audience")
-        XCTAssertEqual(SSFWebhookHandler.errorResponse(for: SSFError.invalidJWT("x")).err, "invalid_request")
+        XCTAssertEqual(SETErrorStatus(reporting: SSFError.invalidJWT("x")).err, "invalid_request")
     }
 }

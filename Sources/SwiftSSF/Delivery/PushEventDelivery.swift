@@ -144,12 +144,6 @@ public actor PushEventDelivery {
     }
 }
 
-/// RFC 8935 error response body: {"err": "<code>", "description": "..."}
-struct PushErrorResponse: Codable {
-    let err: String
-    let description: String?
-}
-
 /// HTTP handler for RFC 8935 SET delivery requests
 final class SSFWebhookHandler: ChannelInboundHandler {
     typealias InboundIn = HTTPServerRequestPart
@@ -254,21 +248,21 @@ final class SSFWebhookHandler: ChannelInboundHandler {
         let token = String(buffer: body).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else {
             sendResponse(context: context, status: .badRequest,
-                         error: PushErrorResponse(err: "invalid_request", description: "Empty request body"))
+                         error: SETErrorStatus(err: "invalid_request", description: "Empty request body"))
             return
         }
 
         let receiver = self.receiver
         let eventHandler = self.eventHandler
         let eventLoop = context.eventLoop
-        let promise = eventLoop.makePromise(of: PushErrorResponse?.self)
+        let promise = eventLoop.makePromise(of: SETErrorStatus?.self)
 
         promise.completeWithTask {
             do {
                 try await receiver.processSecurityEventToken(token, handler: eventHandler)
                 return nil
             } catch {
-                return Self.errorResponse(for: error)
+                return SETErrorStatus(reporting: error)
             }
         }
 
@@ -281,26 +275,8 @@ final class SSFWebhookHandler: ChannelInboundHandler {
                 self.sendResponse(context: context, status: .badRequest, error: error)
             case .failure:
                 self.sendResponse(context: context, status: .badRequest,
-                                  error: PushErrorResponse(err: "invalid_request", description: "Failed to process SET"))
+                                  error: SETErrorStatus(err: "invalid_request", description: "Failed to process SET"))
             }
-        }
-    }
-
-    /// Map a processing failure to an RFC 8935 error code
-    static func errorResponse(for error: Error) -> PushErrorResponse {
-        guard let ssfError = error as? SSFError else {
-            return PushErrorResponse(err: "invalid_request", description: error.localizedDescription)
-        }
-
-        switch ssfError {
-        case .signatureVerificationFailed, .unsupportedAlgorithm, .verificationKeyUnavailable:
-            return PushErrorResponse(err: "invalid_key", description: ssfError.errorDescription)
-        case .invalidIssuer:
-            return PushErrorResponse(err: "invalid_issuer", description: ssfError.errorDescription)
-        case .invalidAudience:
-            return PushErrorResponse(err: "invalid_audience", description: ssfError.errorDescription)
-        default:
-            return PushErrorResponse(err: "invalid_request", description: ssfError.errorDescription)
         }
     }
 
@@ -311,14 +287,14 @@ final class SSFWebhookHandler: ChannelInboundHandler {
         description: String
     ) {
         state = .done
-        sendResponse(context: context, status: status, error: PushErrorResponse(err: err, description: description))
+        sendResponse(context: context, status: status, error: SETErrorStatus(err: err, description: description))
     }
 
     /// Send a 202 (error == nil) or an RFC 8935 JSON error response
     private func sendResponse(
         context: ChannelHandlerContext,
         status: HTTPResponseStatus,
-        error: PushErrorResponse?
+        error: SETErrorStatus?
     ) {
         guard context.eventLoop.inEventLoop else {
             context.eventLoop.execute { self.sendResponse(context: context, status: status, error: error) }

@@ -5,11 +5,13 @@ final class SwiftSSFTests: XCTestCase {
     
     func testFrameworkConstants() throws {
         XCTAssertEqual(swiftSSFVersion, "1.0.0")
-        XCTAssertEqual(supportedSSFVersion, "1.0")
-        
-        XCTAssertTrue(supportedEventTypes.contains("https://schemas.openid.net/secevent/caep/session-revoked"))
-        XCTAssertTrue(supportedEventTypes.contains("https://schemas.openid.net/secevent/risc/account-disabled"))
-        
+        XCTAssertEqual(supportedSSFVersion, "1_0")
+
+        // Event type URIs include the /event-type/ path segment
+        XCTAssertTrue(supportedEventTypes.contains("https://schemas.openid.net/secevent/caep/event-type/session-revoked"))
+        XCTAssertTrue(supportedEventTypes.contains("https://schemas.openid.net/secevent/risc/event-type/account-disabled"))
+        XCTAssertTrue(supportedEventTypes.contains("https://schemas.openid.net/secevent/ssf/event-type/verification"))
+
         XCTAssertTrue(supportedDeliveryMethods.contains("urn:ietf:rfc:8935"))
         XCTAssertTrue(supportedDeliveryMethods.contains("urn:ietf:rfc:8936"))
     }
@@ -66,7 +68,7 @@ final class SwiftSSFTests: XCTestCase {
             jti: "test-jti",
             iat: Int64(Date().timeIntervalSince1970),
             aud: ["test-audience"],
-            sub_id: .simple("test@example.com"),
+            sub_id: .email("test@example.com"),
             events: [:]
         )
         
