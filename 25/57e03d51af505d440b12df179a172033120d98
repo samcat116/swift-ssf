@@ -1,0 +1,28 @@
+Tests/SwiftSSFTests/StreamLifecycleTests.swift
+  s_5a81a3b69062ac::t_2422374af9e2d1 225-231,237
+  s_5a81a3b69062ac::t_6a339fa6e41103 324-325,329,345-375
+  s_5a81a3b69062ac::t_f6680541cf4d21 376-377
+Sources/SwiftSSF/Models/SecurityEvent.swift
+  s_5a81a3b69062ac::t_8053e28831c5f3 120-125,131,133,138-142
+  s_5a81a3b69062ac::t_1162150701ecb8 143-145
+Sources/SwiftSSF/SSFReceiver.swift
+  s_5a81a3b69062ac::t_88c6150f27078d 310-312,314-315
+  s_5a81a3b69062ac::t_8fbec4b161cf77 380-381,383,387
+  s_5a81a3b69062ac::t_d32b3cbde9ec8b 285-289
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2557e03d51af505d440b12df179a172033120d98",
+  "prompts": {},
+  "sessions": {
+    "s_5a81a3b69062ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b58d5d3-21ca-4e53-a37e-800a903858c9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
