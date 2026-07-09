@@ -25,6 +25,8 @@ final class MockTransmitter: @unchecked Sendable {
         private var _ackBodies: [String] = []
         /// When true, ack-only requests fail with 500.
         private var _failAcks = false
+        /// When true, the discovery document omits `verification_endpoint`.
+        private var _omitVerificationEndpoint = false
 
         func enqueue(_ set: String) {
             lock.lock(); defer { lock.unlock() }
@@ -49,6 +51,16 @@ final class MockTransmitter: @unchecked Sendable {
         var failAcks: Bool {
             lock.lock(); defer { lock.unlock() }
             return _failAcks
+        }
+
+        func setOmitVerificationEndpoint(_ value: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            _omitVerificationEndpoint = value
+        }
+
+        var omitVerificationEndpoint: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return _omitVerificationEndpoint
         }
 
         func setOnVerify(_ set: String?) {
@@ -92,6 +104,7 @@ final class MockTransmitter: @unchecked Sendable {
     var verifyCount: Int { state.verifyCount }
     var ackBodies: [String] { state.ackBodies }
     func failAcks(_ value: Bool = true) { state.setFailAcks(value) }
+    func omitVerificationEndpoint(_ value: Bool = true) { state.setOmitVerificationEndpoint(value) }
 
     func start() async throws {
         let state = self.state
@@ -111,14 +124,14 @@ final class MockTransmitter: @unchecked Sendable {
     }
 
     /// Discovery document that points every endpoint back at this server.
-    private static func configJSON(base: String) -> String {
-        """
+    private static func configJSON(base: String, omitVerification: Bool) -> String {
+        let verificationLine = omitVerification ? "" : ",\n          \"verification_endpoint\": \"\(base)/verify\""
+        return """
         {
           "issuer": "\(base)",
           "jwks_uri": "\(base)/jwks",
           "configuration_endpoint": "\(base)/streams",
-          "status_endpoint": "\(base)/status",
-          "verification_endpoint": "\(base)/verify"
+          "status_endpoint": "\(base)/status"\(verificationLine)
         }
         """
     }
@@ -152,7 +165,8 @@ final class MockTransmitter: @unchecked Sendable {
 
             switch path {
             case "/.well-known/ssf-configuration":
-                writeJSON(context: context, status: .ok, body: MockTransmitter.configJSON(base: base))
+                writeJSON(context: context, status: .ok,
+                          body: MockTransmitter.configJSON(base: base, omitVerification: state.omitVerificationEndpoint))
 
             case "/verify":
                 state.recordVerify()
@@ -338,6 +352,28 @@ final class StreamLifecycleTests: XCTestCase {
                 return XCTFail("Expected .verificationTimeout, got \(error)")
             }
         }
+    }
+
+    func testFailedVerifyDoesNotLeakSubscription() async throws {
+        let transmitter = MockTransmitter()
+        transmitter.omitVerificationEndpoint()  // discovery lacks verification_endpoint
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+
+        do {
+            _ = try await receiver.verifyStreamAndAwaitEvent(id: "stream-1", state: "x", timeout: 1)
+            XCTFail("Expected verifyStream to fail without a verification endpoint")
+        } catch {
+            // Expected: the transmitter metadata has no verification_endpoint.
+        }
+
+        // The preflight subscription must be torn down, not left dangling.
+        // (Cleanup runs via onTermination on a hop, so allow a moment.)
+        try await waitFor(timeout: 5) { await receiver.lifecycleSubscriberCount == 0 }
+        let count = await receiver.lifecycleSubscriberCount
+        XCTAssertEqual(count, 0, "Failed verification left a lifecycle subscription registered")
     }
 
     // MARK: - PollEventDelivery auto-reaction

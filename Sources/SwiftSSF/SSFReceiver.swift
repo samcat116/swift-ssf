@@ -293,10 +293,11 @@ public actor SSFReceiver {
         let correlationState = state ?? UUID().uuidString
 
         // Subscribe before firing so a fast transmitter can't deliver the
-        // verification event before we're listening.
+        // verification event before we're listening. The request itself is sent
+        // inside the task group so that `group.cancelAll()` always tears the
+        // subscription down — including when `verifyStream` throws — instead of
+        // leaving a dead continuation registered on the receiver.
         let events = lifecycleEvents()
-
-        try await verifyStream(id: id, state: correlationState)
 
         return try await withThrowingTaskGroup(of: VerificationEvent?.self) { group in
             group.addTask {
@@ -314,6 +315,11 @@ public actor SSFReceiver {
             }
 
             defer { group.cancelAll() }
+
+            // Now that a consumer is attached (and buffering), fire the request.
+            // A failure here propagates out, and the deferred cancelAll cancels
+            // the consumer task so its subscription is finished and removed.
+            try await verifyStream(id: id, state: correlationState)
 
             let first = try await group.next() ?? nil
             if let verification = first {
@@ -349,6 +355,12 @@ public actor SSFReceiver {
 
     private func removeLifecycleContinuation(_ id: Int) {
         lifecycleContinuations.removeValue(forKey: id)
+    }
+
+    /// Number of active `lifecycleEvents()` subscriptions. Test hook for
+    /// verifying subscriptions are torn down and don't leak.
+    internal var lifecycleSubscriberCount: Int {
+        lifecycleContinuations.count
     }
 
     /// Extract SSF framework events from a validated SET and fan them out to all
