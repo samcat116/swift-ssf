@@ -80,6 +80,11 @@ public actor SSFReceiver {
 
     private var cachedConfiguration: TransmitterConfiguration?
 
+    /// Active `lifecycleEvents()` subscriptions, keyed by an incrementing id so
+    /// they can be removed on termination.
+    private var lifecycleContinuations: [Int: AsyncStream<StreamLifecycleEvent>.Continuation] = [:]
+    private var nextLifecycleID = 0
+
     /// The HTTPClient this receiver created and must shut down; nil when the
     /// caller injected their own client.
     private let ownedHTTPClient: HTTPClient?
@@ -121,9 +126,18 @@ public actor SSFReceiver {
     /// Shut down resources owned by this receiver. Safe to call once when the
     /// receiver is no longer needed; injected HTTP clients are not touched.
     public func shutdown() async throws {
+        finishLifecycleObservers()
         if let client = ownedHTTPClient {
             try await client.shutdown()
         }
+    }
+
+    /// Finish all lifecycle observers so their `for await` loops end.
+    private func finishLifecycleObservers() {
+        for continuation in lifecycleContinuations.values {
+            continuation.finish()
+        }
+        lifecycleContinuations.removeAll()
     }
 
     // MARK: - Stream Management (SSF 1.0 §8.1.1)
@@ -228,6 +242,107 @@ public actor SSFReceiver {
         try await httpClient.verifyStream(endpoint: try await endpoint(\.verification_endpoint, "verification_endpoint"), request)
     }
 
+    /// Request verification and await the matching verification event.
+    ///
+    /// Fires a verification request, then waits for the transmitter to deliver
+    /// the correlated verification event over the stream, echoing `state`. When
+    /// `state` is omitted a unique value is generated so correlation is always
+    /// reliable.
+    ///
+    /// The verification event is delivered like any other SET, so a delivery
+    /// mechanism for the stream (e.g. a running `PollEventDelivery`, or the push
+    /// server, or `processSecurityEventToken`) must be active to receive it —
+    /// this call only correlates the result, it does not poll on its own.
+    ///
+    /// - Throws: `SSFError.verificationTimeout` if no matching event arrives
+    ///   within `timeout` seconds.
+    @discardableResult
+    public func verifyStreamAndAwaitEvent(
+        id: String,
+        state: String? = nil,
+        timeout: TimeInterval = 30
+    ) async throws -> VerificationEvent {
+        let correlationState = state ?? UUID().uuidString
+
+        // Subscribe before firing so a fast transmitter can't deliver the
+        // verification event before we're listening.
+        let events = lifecycleEvents()
+
+        try await verifyStream(id: id, state: correlationState)
+
+        return try await withThrowingTaskGroup(of: VerificationEvent?.self) { group in
+            group.addTask {
+                for await event in events {
+                    if case .verified(let verification) = event.payload,
+                       verification.state == correlationState {
+                        return verification
+                    }
+                }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil
+            }
+
+            defer { group.cancelAll() }
+
+            let first = try await group.next() ?? nil
+            if let verification = first {
+                return verification
+            }
+            throw SSFError.verificationTimeout(
+                "No verification event with state \"\(correlationState)\" for stream \(id) within \(timeout)s"
+            )
+        }
+    }
+
+    // MARK: - Stream Lifecycle Observation
+
+    /// Observe framework-level stream lifecycle events (`stream-updated` and
+    /// `verification`) as this receiver processes SETs.
+    ///
+    /// Each call returns an independent stream; every subscriber sees every
+    /// event. Delivery layers such as `PollEventDelivery` use this to react to
+    /// status changes automatically, and applications can use it to drive their
+    /// own stream-health logic. The stream finishes when the receiver is shut
+    /// down.
+    public func lifecycleEvents() -> AsyncStream<StreamLifecycleEvent> {
+        AsyncStream { continuation in
+            let id = nextLifecycleID
+            nextLifecycleID += 1
+            lifecycleContinuations[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                Task { await self.removeLifecycleContinuation(id) }
+            }
+        }
+    }
+
+    private func removeLifecycleContinuation(_ id: Int) {
+        lifecycleContinuations.removeValue(forKey: id)
+    }
+
+    /// Extract SSF framework events from a validated SET and fan them out to all
+    /// current `lifecycleEvents()` subscribers.
+    private func broadcastLifecycleEvents(from token: SecurityEventToken, pollEndpoint: URL?) {
+        guard !lifecycleContinuations.isEmpty else { return }
+
+        if let updated = try? token.payload.event(SSFEventTypes.streamUpdated, as: StreamUpdatedEvent.self) {
+            emitLifecycleEvent(StreamLifecycleEvent(payload: .statusChanged(updated), pollEndpoint: pollEndpoint))
+        }
+
+        if let verification = try? token.payload.event(SSFEventTypes.verification, as: VerificationEvent.self) {
+            emitLifecycleEvent(StreamLifecycleEvent(payload: .verified(verification), pollEndpoint: pollEndpoint))
+        }
+    }
+
+    private func emitLifecycleEvent(_ event: StreamLifecycleEvent) {
+        for continuation in lifecycleContinuations.values {
+            continuation.yield(event)
+        }
+    }
+
     // MARK: - Event Processing
 
     /// Poll a stream's delivery endpoint once (RFC 8936).
@@ -255,6 +370,7 @@ public actor SSFReceiver {
         for (jti, setToken) in response.sets {
             do {
                 let securityEventToken = try await parseAndValidateToken(setToken)
+                broadcastLifecycleEvents(from: securityEventToken, pollEndpoint: endpoint)
                 try await handler.handleEvent(securityEventToken)
                 acks.append(jti)
             } catch {
@@ -317,6 +433,7 @@ public actor SSFReceiver {
     ) async throws -> SecurityEventToken {
         do {
             let securityEventToken = try await parseAndValidateToken(token)
+            broadcastLifecycleEvents(from: securityEventToken, pollEndpoint: nil)
             try await handler.handleEvent(securityEventToken)
             return securityEventToken
         } catch {

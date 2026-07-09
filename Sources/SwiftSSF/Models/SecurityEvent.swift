@@ -100,6 +100,34 @@ public struct StreamUpdatedEvent: Codable, Sendable {
     }
 }
 
+/// A framework-level signal an `SSFReceiver` surfaces while processing SETs,
+/// so applications can react to stream lifecycle changes without re-parsing
+/// SETs themselves. Observe these via `SSFReceiver.lifecycleEvents()`.
+public struct StreamLifecycleEvent: Sendable {
+    /// What the transmitter signalled.
+    public enum Payload: Sendable {
+        /// The transmitter changed the stream's status (`stream-updated`).
+        case statusChanged(StreamUpdatedEvent)
+
+        /// A verification result arrived (`verification`), echoing the `state`
+        /// from the corresponding verification request for correlation.
+        case verified(VerificationEvent)
+    }
+
+    /// The framework event carried by the SET.
+    public let payload: Payload
+
+    /// The poll delivery endpoint the carrying SET arrived on, or `nil` when the
+    /// SET was received by push or processed directly with no poll context.
+    /// Poll-based reactors use this to match events to their own stream.
+    public let pollEndpoint: URL?
+
+    public init(payload: Payload, pollEndpoint: URL? = nil) {
+        self.payload = payload
+        self.pollEndpoint = pollEndpoint
+    }
+}
+
 // MARK: - CAEP Event Types (CAEP 1.0)
 
 /// Session of the subject was revoked. All fields are the CAEP common

@@ -98,11 +98,19 @@ struct ExampleSSFReceiver {
             let status = try await receiver.getStreamStatus(id: caepStream.stream_id)
             logger.info("CAEP stream status: \(status.status)")
 
-            // Request stream verification; the transmitter responds 204 and
-            // delivers a verification event over the stream (handled by
-            // ExampleEventHandler below)
-            try await receiver.verifyStream(id: caepStream.stream_id, state: "example-verification")
-            logger.info("Requested stream verification")
+            // Request stream verification and await the correlated verification
+            // event. The CAEP poll service started above delivers it, so this
+            // one call reports whether the stream is healthy end-to-end.
+            do {
+                let verification = try await receiver.verifyStreamAndAwaitEvent(
+                    id: caepStream.stream_id,
+                    state: "example-verification",
+                    timeout: 30
+                )
+                logger.info("Stream verified; transmitter echoed state: \(verification.state ?? "nil")")
+            } catch {
+                logger.warning("Stream verification did not complete: \(error.localizedDescription)")
+            }
 
             // Example 4: Multi-stream polling
             logger.info("Example 4: Multi-stream polling manager")

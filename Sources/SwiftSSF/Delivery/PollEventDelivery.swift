@@ -24,13 +24,20 @@ public struct PollDeliveryConfiguration: Sendable {
     /// Whether to continue polling after errors
     public let continueOnError: Bool
 
+    /// React to `stream-updated` events for this stream: pause polling while the
+    /// transmitter reports the stream `paused` or `disabled`, and resume when it
+    /// goes back to `enabled`. Avoids hammering a dead stream. Defaults to
+    /// `true`.
+    public let reactToStreamStatus: Bool
+
     public init(
         pollInterval: TimeInterval = 30.0,
         maxEventsPerPoll: Int = 100,
         returnImmediately: Bool = true,
         maxConsecutiveErrors: Int = 5,
         errorBackoffStrategy: BackoffStrategy = .exponential(base: 2.0, maxDelay: 300.0, multiplier: 1.0),
-        continueOnError: Bool = true
+        continueOnError: Bool = true,
+        reactToStreamStatus: Bool = true
     ) {
         self.pollInterval = pollInterval
         self.maxEventsPerPoll = maxEventsPerPoll
@@ -38,6 +45,7 @@ public struct PollDeliveryConfiguration: Sendable {
         self.maxConsecutiveErrors = maxConsecutiveErrors
         self.errorBackoffStrategy = errorBackoffStrategy
         self.continueOnError = continueOnError
+        self.reactToStreamStatus = reactToStreamStatus
     }
 }
 
@@ -82,7 +90,12 @@ public actor PollEventDelivery {
 
     private var isRunning = false
     private var pollTask: Task<Void, Never>?
+    private var statusObserverTask: Task<Void, Never>?
     private var consecutiveErrors = 0
+
+    /// The transmitter-reported status that stopped this delivery, or nil while
+    /// it is running or after a manual `stop()`.
+    private var stoppedStatus: StreamStatus?
 
     /// - Parameter endpoint: the stream's poll delivery endpoint
     ///   (`delivery.endpoint_url` from the stream configuration)
@@ -106,9 +119,19 @@ public actor PollEventDelivery {
         }
 
         isRunning = true
+        stoppedStatus = nil
         consecutiveErrors = 0
 
         logger.info("Starting poll-based event delivery from \(endpoint)")
+
+        // Subscribe to lifecycle events before starting the poll loop so the
+        // observer can't miss a status change the very first poll delivers.
+        if configuration.reactToStreamStatus {
+            let events = await receiver.lifecycleEvents()
+            statusObserverTask = Task {
+                await observeStreamStatus(events)
+            }
+        }
 
         pollTask = Task {
             await runPollingLoop()
@@ -123,15 +146,32 @@ public actor PollEventDelivery {
         }
 
         logger.info("Stopping poll-based event delivery from \(endpoint)")
+        stoppedStatus = nil
+        teardown()
+    }
 
+    /// Cancel the poll loop and status observer. Leaves `stoppedStatus` intact
+    /// so callers can tell an auto-stop from a manual one.
+    private func teardown() {
         isRunning = false
         pollTask?.cancel()
         pollTask = nil
+        statusObserverTask?.cancel()
+        statusObserverTask = nil
     }
 
     /// Check if polling is currently running
     public var running: Bool {
         return isRunning
+    }
+
+    /// The transmitter-reported status (`paused`/`disabled`) that caused this
+    /// delivery to stop itself, or nil while running or after a manual `stop()`.
+    /// Poll delivery can't observe a later re-enable once it has stopped, so an
+    /// application that wants to resume should re-check the stream status and
+    /// call `start()` again.
+    public var stoppedByTransmitterStatus: StreamStatus? {
+        return stoppedStatus
     }
 
     /// Get current consecutive error count
@@ -172,6 +212,13 @@ public actor PollEventDelivery {
             } catch is CancellationError {
                 break
             } catch {
+                // A stop()/status teardown cancels the in-flight poll; the HTTP
+                // client surfaces that as a wrapped error. Treat it as a clean
+                // exit rather than a spurious poll failure.
+                if Task.isCancelled || !isRunning {
+                    break
+                }
+
                 consecutiveErrors += 1
                 let ssfError = error as? SSFError ?? SSFError.unknown(error)
 
@@ -202,6 +249,31 @@ public actor PollEventDelivery {
         }
 
         logger.info("Poll delivery loop ended for \(endpoint)")
+    }
+
+    /// Watch the receiver's lifecycle events and stop polling when the
+    /// transmitter reports this stream `paused` or `disabled`, so we don't keep
+    /// hitting a stream that won't deliver events.
+    private func observeStreamStatus(_ events: AsyncStream<StreamLifecycleEvent>) async {
+        for await event in events {
+            if Task.isCancelled || !isRunning { break }
+
+            // Only react to status changes delivered on our own poll endpoint.
+            guard event.pollEndpoint == endpoint,
+                  case .statusChanged(let updated) = event.payload else {
+                continue
+            }
+
+            switch updated.status {
+            case .paused, .disabled:
+                let detail = updated.reason.map { " (\($0))" } ?? ""
+                logger.info("Transmitter reported stream \(updated.status.rawValue)\(detail); stopping polling for \(endpoint)")
+                stoppedStatus = updated.status
+                teardown()
+            case .enabled:
+                continue  // already polling; nothing to do
+            }
+        }
     }
 }
 

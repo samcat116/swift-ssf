@@ -64,7 +64,10 @@ public enum SSFError: Error, LocalizedError, Sendable {
     
     /// Connection timeout
     case connectionTimeout
-    
+
+    /// Timed out awaiting the verification event correlated with a request
+    case verificationTimeout(String)
+
     /// Unknown error
     case unknown(Error)
     
@@ -112,6 +115,8 @@ public enum SSFError: Error, LocalizedError, Sendable {
             return "Configuration error: \(message)"
         case .connectionTimeout:
             return "Connection timeout"
+        case .verificationTimeout(let message):
+            return "Verification timed out: \(message)"
         case .unknown(let error):
             return "Unknown error: \(error.localizedDescription)"
         }
