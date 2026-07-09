@@ -46,8 +46,8 @@ jobs:
       - name: Test
         run: swift test
 
-  swift6-mode:
-    name: Swift 6 language mode (non-blocking)
+  strict-concurrency:
+    name: Strict concurrency (non-blocking)
     runs-on: ubuntu-latest
     container: swift:6.0
     continue-on-error: true
@@ -55,5 +55,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Swift version
         run: swift --version
-      - name: Build in Swift 6 language mode
-        run: swift build --build-tests -Xswiftc -swift-version -Xswiftc 6
+      # Surfaces remaining data-race warnings to track Swift 6 readiness.
+      # We can't force -swift-version 6 across the whole graph: several
+      # dependencies enable StrictConcurrency as an "upcoming feature" in
+      # their manifests, which errors ("already enabled") under language
+      # mode 6. -strict-concurrency=complete gives the same signal for our
+      # own code without that clash.
+      - name: Build with complete strict-concurrency checking
+        run: swift build --build-tests -Xswiftc -strict-concurrency=complete
