@@ -7,7 +7,13 @@ public enum SSFError: Error, LocalizedError, Sendable {
     
     /// JWT signature verification failed
     case signatureVerificationFailed
-    
+
+    /// The JWT uses a signing algorithm the verification key doesn't match
+    case unsupportedAlgorithm(String)
+
+    /// No usable verification key could be resolved for the token
+    case verificationKeyUnavailable(String)
+
     /// JWT has expired
     case tokenExpired
     
@@ -68,6 +74,10 @@ public enum SSFError: Error, LocalizedError, Sendable {
             return "Invalid JWT: \(message)"
         case .signatureVerificationFailed:
             return "JWT signature verification failed"
+        case .unsupportedAlgorithm(let alg):
+            return "Unsupported or mismatched JWT signing algorithm: \(alg)"
+        case .verificationKeyUnavailable(let message):
+            return "Verification key unavailable: \(message)"
         case .tokenExpired:
             return "JWT token has expired"
         case .invalidIssuer(let expected, let actual):
@@ -104,6 +114,42 @@ public enum SSFError: Error, LocalizedError, Sendable {
             return "Connection timeout"
         case .unknown(let error):
             return "Unknown error: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Error status for reporting a SET processing failure back to the
+/// transmitter, used both as the RFC 8935 push error response body and as
+/// the values of the RFC 8936 "setErrs" poll request member.
+public struct SETErrorStatus: Codable, Sendable {
+    /// Registered error code (invalid_request, invalid_key, invalid_issuer,
+    /// invalid_audience, authentication_failed, access_denied)
+    public let err: String
+
+    /// Human-readable description of the failure
+    public let description: String?
+
+    public init(err: String, description: String? = nil) {
+        self.err = err
+        self.description = description
+    }
+
+    /// Map a processing failure to its registered error code
+    public init(reporting error: Error) {
+        guard let ssfError = error as? SSFError else {
+            self.init(err: "invalid_request", description: error.localizedDescription)
+            return
+        }
+
+        switch ssfError {
+        case .signatureVerificationFailed, .unsupportedAlgorithm, .verificationKeyUnavailable:
+            self.init(err: "invalid_key", description: ssfError.errorDescription)
+        case .invalidIssuer:
+            self.init(err: "invalid_issuer", description: ssfError.errorDescription)
+        case .invalidAudience:
+            self.init(err: "invalid_audience", description: ssfError.errorDescription)
+        default:
+            self.init(err: "invalid_request", description: ssfError.errorDescription)
         }
     }
 }

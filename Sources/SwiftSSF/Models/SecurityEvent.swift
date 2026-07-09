@@ -1,230 +1,443 @@
 import Foundation
 
-/// Base protocol for all security events
-public protocol SecurityEvent: Codable, Sendable {
-    /// The type identifier for this event
-    static var eventType: String { get }
+// MARK: - Event Type URIs
+
+/// SSF framework event types (SSF 1.0)
+public enum SSFEventTypes {
+    /// Stream verification event, delivered in response to a verification request
+    public static let verification = "https://schemas.openid.net/secevent/ssf/event-type/verification"
+
+    /// Notifies the receiver that the transmitter changed the stream's status
+    public static let streamUpdated = "https://schemas.openid.net/secevent/ssf/event-type/stream-updated"
+
+    public static let all = [verification, streamUpdated]
 }
 
-/// CAEP (Continuous Access Evaluation Protocol) Events
-public enum CAEPEvent: SecurityEvent, Sendable {
-    case sessionRevoked(SessionRevokedEvent)
-    case tokenClaimsChange(TokenClaimsChangeEvent)
-    case credentialChange(CredentialChangeEvent)
-    case assuranceLevelChange(AssuranceLevelChangeEvent)
-    case deviceComplianceChange(DeviceComplianceChangeEvent)
-    
-    public static var eventType: String { "https://schemas.openid.net/secevent/caep/" }
-    
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: DynamicKey.self)
-        
-        if container.contains(.init(stringValue: "session-revoked")!) {
-            let event = try container.decode(SessionRevokedEvent.self, forKey: .init(stringValue: "session-revoked")!)
-            self = .sessionRevoked(event)
-        } else if container.contains(.init(stringValue: "token-claims-change")!) {
-            let event = try container.decode(TokenClaimsChangeEvent.self, forKey: .init(stringValue: "token-claims-change")!)
-            self = .tokenClaimsChange(event)
-        } else if container.contains(.init(stringValue: "credential-change")!) {
-            let event = try container.decode(CredentialChangeEvent.self, forKey: .init(stringValue: "credential-change")!)
-            self = .credentialChange(event)
-        } else if container.contains(.init(stringValue: "assurance-level-change")!) {
-            let event = try container.decode(AssuranceLevelChangeEvent.self, forKey: .init(stringValue: "assurance-level-change")!)
-            self = .assuranceLevelChange(event)
-        } else if container.contains(.init(stringValue: "device-compliance-change")!) {
-            let event = try container.decode(DeviceComplianceChangeEvent.self, forKey: .init(stringValue: "device-compliance-change")!)
-            self = .deviceComplianceChange(event)
-        } else {
-            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown CAEP event type"))
-        }
-    }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DynamicKey.self)
-        
-        switch self {
-        case .sessionRevoked(let event):
-            try container.encode(event, forKey: .init(stringValue: "session-revoked")!)
-        case .tokenClaimsChange(let event):
-            try container.encode(event, forKey: .init(stringValue: "token-claims-change")!)
-        case .credentialChange(let event):
-            try container.encode(event, forKey: .init(stringValue: "credential-change")!)
-        case .assuranceLevelChange(let event):
-            try container.encode(event, forKey: .init(stringValue: "assurance-level-change")!)
-        case .deviceComplianceChange(let event):
-            try container.encode(event, forKey: .init(stringValue: "device-compliance-change")!)
-        }
-    }
+/// CAEP 1.0 event types
+public enum CAEPEventTypes {
+    public static let sessionRevoked = "https://schemas.openid.net/secevent/caep/event-type/session-revoked"
+    public static let tokenClaimsChange = "https://schemas.openid.net/secevent/caep/event-type/token-claims-change"
+    public static let credentialChange = "https://schemas.openid.net/secevent/caep/event-type/credential-change"
+    public static let assuranceLevelChange = "https://schemas.openid.net/secevent/caep/event-type/assurance-level-change"
+    public static let deviceComplianceChange = "https://schemas.openid.net/secevent/caep/event-type/device-compliance-change"
+    public static let sessionEstablished = "https://schemas.openid.net/secevent/caep/event-type/session-established"
+    public static let sessionPresented = "https://schemas.openid.net/secevent/caep/event-type/session-presented"
+    public static let riskLevelChange = "https://schemas.openid.net/secevent/caep/event-type/risk-level-change"
+
+    public static let all = [
+        sessionRevoked, tokenClaimsChange, credentialChange, assuranceLevelChange,
+        deviceComplianceChange, sessionEstablished, sessionPresented, riskLevelChange,
+    ]
 }
 
-/// RISC (Risk Incident Sharing and Coordination) Events
-public enum RISCEvent: SecurityEvent, Sendable {
-    case accountPurged(AccountPurgedEvent)
-    case accountDisabled(AccountDisabledEvent)
-    case accountEnabled(AccountEnabledEvent)
-    case credentialCompromise(CredentialCompromiseEvent)
-    case accountCredentialChangeRequired(AccountCredentialChangeRequiredEvent)
-    
-    public static var eventType: String { "https://schemas.openid.net/secevent/risc/" }
-    
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: DynamicKey.self)
-        
-        if container.contains(.init(stringValue: "account-purged")!) {
-            let event = try container.decode(AccountPurgedEvent.self, forKey: .init(stringValue: "account-purged")!)
-            self = .accountPurged(event)
-        } else if container.contains(.init(stringValue: "account-disabled")!) {
-            let event = try container.decode(AccountDisabledEvent.self, forKey: .init(stringValue: "account-disabled")!)
-            self = .accountDisabled(event)
-        } else if container.contains(.init(stringValue: "account-enabled")!) {
-            let event = try container.decode(AccountEnabledEvent.self, forKey: .init(stringValue: "account-enabled")!)
-            self = .accountEnabled(event)
-        } else if container.contains(.init(stringValue: "credential-compromise")!) {
-            let event = try container.decode(CredentialCompromiseEvent.self, forKey: .init(stringValue: "credential-compromise")!)
-            self = .credentialCompromise(event)
-        } else if container.contains(.init(stringValue: "account-credential-change-required")!) {
-            let event = try container.decode(AccountCredentialChangeRequiredEvent.self, forKey: .init(stringValue: "account-credential-change-required")!)
-            self = .accountCredentialChangeRequired(event)
-        } else {
-            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown RISC event type"))
-        }
+/// RISC 1.0 event types
+public enum RISCEventTypes {
+    public static let accountCredentialChangeRequired = "https://schemas.openid.net/secevent/risc/event-type/account-credential-change-required"
+    public static let accountPurged = "https://schemas.openid.net/secevent/risc/event-type/account-purged"
+    public static let accountDisabled = "https://schemas.openid.net/secevent/risc/event-type/account-disabled"
+    public static let accountEnabled = "https://schemas.openid.net/secevent/risc/event-type/account-enabled"
+    public static let identifierChanged = "https://schemas.openid.net/secevent/risc/event-type/identifier-changed"
+    public static let identifierRecycled = "https://schemas.openid.net/secevent/risc/event-type/identifier-recycled"
+    public static let credentialCompromise = "https://schemas.openid.net/secevent/risc/event-type/credential-compromise"
+    public static let optIn = "https://schemas.openid.net/secevent/risc/event-type/opt-in"
+    public static let optOutInitiated = "https://schemas.openid.net/secevent/risc/event-type/opt-out-initiated"
+    public static let optOutCancelled = "https://schemas.openid.net/secevent/risc/event-type/opt-out-cancelled"
+    public static let optOutEffective = "https://schemas.openid.net/secevent/risc/event-type/opt-out-effective"
+    public static let recoveryActivated = "https://schemas.openid.net/secevent/risc/event-type/recovery-activated"
+    public static let recoveryInformationChanged = "https://schemas.openid.net/secevent/risc/event-type/recovery-information-changed"
+
+    /// Deprecated in RISC 1.0; new implementations must use CAEP session-revoked
+    public static let sessionsRevoked = "https://schemas.openid.net/secevent/risc/event-type/sessions-revoked"
+
+    public static let all = [
+        accountCredentialChangeRequired, accountPurged, accountDisabled, accountEnabled,
+        identifierChanged, identifierRecycled, credentialCompromise,
+        optIn, optOutInitiated, optOutCancelled, optOutEffective,
+        recoveryActivated, recoveryInformationChanged,
+    ]
+}
+
+// MARK: - Typed event access
+
+extension SecurityEventPayload {
+    /// Decode the payload of a specific event type into a typed struct.
+    /// Returns nil when the SET doesn't contain that event type.
+    public func event<T: Decodable>(_ type: String, as: T.Type) throws -> T? {
+        guard let raw = events[type] else { return nil }
+        let data = try JSONEncoder().encode(raw)
+        return try JSONDecoder().decode(T.self, from: data)
     }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DynamicKey.self)
-        
-        switch self {
-        case .accountPurged(let event):
-            try container.encode(event, forKey: .init(stringValue: "account-purged")!)
-        case .accountDisabled(let event):
-            try container.encode(event, forKey: .init(stringValue: "account-disabled")!)
-        case .accountEnabled(let event):
-            try container.encode(event, forKey: .init(stringValue: "account-enabled")!)
-        case .credentialCompromise(let event):
-            try container.encode(event, forKey: .init(stringValue: "credential-compromise")!)
-        case .accountCredentialChangeRequired(let event):
-            try container.encode(event, forKey: .init(stringValue: "account-credential-change-required")!)
-        }
+
+    /// The event type URIs present in this SET
+    public var eventTypes: [String] {
+        Array(events.keys)
     }
 }
 
-// MARK: - CAEP Event Types
+// MARK: - SSF Events
 
+/// Payload of the SSF verification event
+public struct VerificationEvent: Codable, Sendable {
+    /// Echoes the state from the verification request
+    public let state: String?
+
+    public init(state: String? = nil) {
+        self.state = state
+    }
+}
+
+/// Payload of the SSF stream-updated event
+public struct StreamUpdatedEvent: Codable, Sendable {
+    /// The new stream status
+    public let status: StreamStatus
+
+    /// Optional human-readable reason for the change
+    public let reason: String?
+
+    public init(status: StreamStatus, reason: String? = nil) {
+        self.status = status
+        self.reason = reason
+    }
+}
+
+// MARK: - CAEP Event Types (CAEP 1.0)
+
+/// Session of the subject was revoked. All fields are the CAEP common
+/// optional claims; the event has no required members of its own.
 public struct SessionRevokedEvent: Codable, Sendable {
-    public let reason_admin: String?
-    public let reason_user: String?
-    public let reason_code: String?
-    
-    public init(reason_admin: String? = nil, reason_user: String? = nil, reason_code: String? = nil) {
-        self.reason_admin = reason_admin
-        self.reason_user = reason_user
-        self.reason_code = reason_code
-    }
-}
-
-public struct TokenClaimsChangeEvent: Codable, Sendable {
-    public let claims: [String: AnyCodable]
-    
-    public init(claims: [String: AnyCodable]) {
-        self.claims = claims
-    }
-}
-
-public struct CredentialChangeEvent: Codable, Sendable {
-    public let change_type: String
-    public let friendly_name: String?
-    
-    public init(change_type: String, friendly_name: String? = nil) {
-        self.change_type = change_type
-        self.friendly_name = friendly_name
-    }
-}
-
-public struct AssuranceLevelChangeEvent: Codable, Sendable {
-    public let current_level: String
-    public let previous_level: String?
-    public let change_direction: String
-    
-    public init(current_level: String, previous_level: String? = nil, change_direction: String) {
-        self.current_level = current_level
-        self.previous_level = previous_level
-        self.change_direction = change_direction
-    }
-}
-
-public struct DeviceComplianceChangeEvent: Codable, Sendable {
-    public let current_status: String
-    public let previous_status: String?
-    
-    public init(current_status: String, previous_status: String? = nil) {
-        self.current_status = current_status
-        self.previous_status = previous_status
-    }
-}
-
-// MARK: - RISC Event Types
-
-public struct AccountPurgedEvent: Codable, Sendable {
-    public let reason: String?
-    
-    public init(reason: String? = nil) {
-        self.reason = reason
-    }
-}
-
-public struct AccountDisabledEvent: Codable, Sendable {
-    public let reason: String?
-    
-    public init(reason: String? = nil) {
-        self.reason = reason
-    }
-}
-
-public struct AccountEnabledEvent: Codable, Sendable {
-    public let reason: String?
-    
-    public init(reason: String? = nil) {
-        self.reason = reason
-    }
-}
-
-public struct CredentialCompromiseEvent: Codable, Sendable {
-    public let credential_type: String
-    public let reason_admin: String?
-    public let reason_user: String?
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
     public let event_timestamp: Int64?
-    
-    public init(credential_type: String, reason_admin: String? = nil, reason_user: String? = nil, event_timestamp: Int64? = nil) {
-        self.credential_type = credential_type
+
+    public init(
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.initiating_entity = initiating_entity
         self.reason_admin = reason_admin
         self.reason_user = reason_user
         self.event_timestamp = event_timestamp
     }
 }
 
+public struct TokenClaimsChangeEvent: Codable, Sendable {
+    /// REQUIRED: claims that changed with their new values
+    public let claims: [String: AnyCodable]
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
+    public let event_timestamp: Int64?
+
+    public init(
+        claims: [String: AnyCodable],
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.claims = claims
+        self.initiating_entity = initiating_entity
+        self.reason_admin = reason_admin
+        self.reason_user = reason_user
+        self.event_timestamp = event_timestamp
+    }
+}
+
+public struct CredentialChangeEvent: Codable, Sendable {
+    /// REQUIRED: e.g. "password", "pin", "x509", "fido2-platform", ...
+    public let credential_type: String
+
+    /// REQUIRED: "create", "revoke", "update", or "delete"
+    public let change_type: String
+
+    public let friendly_name: String?
+    public let x509_issuer: String?
+    public let x509_serial: String?
+    public let fido2_aaguid: String?
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
+    public let event_timestamp: Int64?
+
+    public init(
+        credential_type: String,
+        change_type: String,
+        friendly_name: String? = nil,
+        x509_issuer: String? = nil,
+        x509_serial: String? = nil,
+        fido2_aaguid: String? = nil,
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.credential_type = credential_type
+        self.change_type = change_type
+        self.friendly_name = friendly_name
+        self.x509_issuer = x509_issuer
+        self.x509_serial = x509_serial
+        self.fido2_aaguid = fido2_aaguid
+        self.initiating_entity = initiating_entity
+        self.reason_admin = reason_admin
+        self.reason_user = reason_user
+        self.event_timestamp = event_timestamp
+    }
+}
+
+public struct AssuranceLevelChangeEvent: Codable, Sendable {
+    /// REQUIRED: the namespace of the levels, e.g. "nist-aal"
+    public let namespace: String
+
+    /// REQUIRED: the new assurance level
+    public let current_level: String
+
+    public let previous_level: String?
+
+    /// "increase" or "decrease"
+    public let change_direction: String?
+
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
+    public let event_timestamp: Int64?
+
+    public init(
+        namespace: String,
+        current_level: String,
+        previous_level: String? = nil,
+        change_direction: String? = nil,
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.namespace = namespace
+        self.current_level = current_level
+        self.previous_level = previous_level
+        self.change_direction = change_direction
+        self.initiating_entity = initiating_entity
+        self.reason_admin = reason_admin
+        self.reason_user = reason_user
+        self.event_timestamp = event_timestamp
+    }
+}
+
+public struct DeviceComplianceChangeEvent: Codable, Sendable {
+    /// REQUIRED: "compliant" or "not-compliant"
+    public let previous_status: String
+
+    /// REQUIRED: "compliant" or "not-compliant"
+    public let current_status: String
+
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
+    public let event_timestamp: Int64?
+
+    public init(
+        previous_status: String,
+        current_status: String,
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.previous_status = previous_status
+        self.current_status = current_status
+        self.initiating_entity = initiating_entity
+        self.reason_admin = reason_admin
+        self.reason_user = reason_user
+        self.event_timestamp = event_timestamp
+    }
+}
+
+public struct SessionEstablishedEvent: Codable, Sendable {
+    /// IP addresses observed for the session
+    public let ips: [String]?
+
+    /// Fingerprint of the user agent
+    public let fp_ua: String?
+
+    /// Authentication context class reference
+    public let acr: String?
+
+    /// Authentication methods references
+    public let amr: [String]?
+
+    /// Transmitter's external session identifier
+    public let ext_id: String?
+
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
+    public let event_timestamp: Int64?
+
+    public init(
+        ips: [String]? = nil,
+        fp_ua: String? = nil,
+        acr: String? = nil,
+        amr: [String]? = nil,
+        ext_id: String? = nil,
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.ips = ips
+        self.fp_ua = fp_ua
+        self.acr = acr
+        self.amr = amr
+        self.ext_id = ext_id
+        self.initiating_entity = initiating_entity
+        self.reason_admin = reason_admin
+        self.reason_user = reason_user
+        self.event_timestamp = event_timestamp
+    }
+}
+
+public struct SessionPresentedEvent: Codable, Sendable {
+    public let ips: [String]?
+    public let fp_ua: String?
+    public let ext_id: String?
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
+    public let event_timestamp: Int64?
+
+    public init(
+        ips: [String]? = nil,
+        fp_ua: String? = nil,
+        ext_id: String? = nil,
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.ips = ips
+        self.fp_ua = fp_ua
+        self.ext_id = ext_id
+        self.initiating_entity = initiating_entity
+        self.reason_admin = reason_admin
+        self.reason_user = reason_user
+        self.event_timestamp = event_timestamp
+    }
+}
+
+public struct RiskLevelChangeEvent: Codable, Sendable {
+    /// REQUIRED: "USER" or "SESSION"
+    public let principal: String
+
+    /// REQUIRED: "LOW", "MEDIUM", or "HIGH"
+    public let current_level: String
+
+    public let previous_level: String?
+    public let risk_reason: String?
+    public let initiating_entity: String?
+    public let reason_admin: [String: String]?
+    public let reason_user: [String: String]?
+    public let event_timestamp: Int64?
+
+    public init(
+        principal: String,
+        current_level: String,
+        previous_level: String? = nil,
+        risk_reason: String? = nil,
+        initiating_entity: String? = nil,
+        reason_admin: [String: String]? = nil,
+        reason_user: [String: String]? = nil,
+        event_timestamp: Int64? = nil
+    ) {
+        self.principal = principal
+        self.current_level = current_level
+        self.previous_level = previous_level
+        self.risk_reason = risk_reason
+        self.initiating_entity = initiating_entity
+        self.reason_admin = reason_admin
+        self.reason_user = reason_user
+        self.event_timestamp = event_timestamp
+    }
+}
+
+// MARK: - RISC Event Types (RISC 1.0)
+
+public struct AccountPurgedEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct AccountDisabledEvent: Codable, Sendable {
+    /// "hijacking" or "bulk-account"
+    public let reason: String?
+
+    public init(reason: String? = nil) {
+        self.reason = reason
+    }
+}
+
+public struct AccountEnabledEvent: Codable, Sendable {
+    public init() {}
+}
+
 public struct AccountCredentialChangeRequiredEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct CredentialCompromiseEvent: Codable, Sendable {
+    /// REQUIRED: the type of credential that was compromised
+    public let credential_type: String
+
+    public let event_timestamp: Int64?
     public let reason_admin: String?
     public let reason_user: String?
-    
-    public init(reason_admin: String? = nil, reason_user: String? = nil) {
+
+    public init(
+        credential_type: String,
+        event_timestamp: Int64? = nil,
+        reason_admin: String? = nil,
+        reason_user: String? = nil
+    ) {
+        self.credential_type = credential_type
+        self.event_timestamp = event_timestamp
         self.reason_admin = reason_admin
         self.reason_user = reason_user
     }
 }
 
-// MARK: - Helper Types
+public struct IdentifierChangedEvent: Codable, Sendable {
+    /// The new value of the identifier, when it's shared with the receiver
+    public let new_value: String?
 
-private struct DynamicKey: CodingKey, Sendable {
-    let stringValue: String
-    let intValue: Int?
-    
-    init?(stringValue: String) {
-        self.stringValue = stringValue
-        self.intValue = nil
+    public init(new_value: String? = nil) {
+        self.new_value = new_value
     }
-    
-    init?(intValue: Int) {
-        self.stringValue = String(intValue)
-        self.intValue = intValue
-    }
+}
+
+public struct IdentifierRecycledEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct OptInEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct OptOutInitiatedEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct OptOutCancelledEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct OptOutEffectiveEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct RecoveryActivatedEvent: Codable, Sendable {
+    public init() {}
+}
+
+public struct RecoveryInformationChangedEvent: Codable, Sendable {
+    public init() {}
 }

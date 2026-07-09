@@ -22,14 +22,14 @@ public struct SecurityEventToken: Codable, Sendable {
 public struct JWTHeader: Codable, Sendable {
     /// Algorithm used for signing
     public let alg: String
-    
-    /// Token type (always "JWT")
-    public let typ: String
-    
+
+    /// Token type ("secevent+jwt" for SETs, per RFC 8417)
+    public let typ: String?
+
     /// Key ID used for signing
     public let kid: String?
-    
-    public init(alg: String, typ: String = "JWT", kid: String? = nil) {
+
+    public init(alg: String, typ: String? = "secevent+jwt", kid: String? = nil) {
         self.alg = alg
         self.typ = typ
         self.kid = kid
@@ -81,96 +81,171 @@ public struct SecurityEventPayload: Codable, Sendable {
         self.toe = toe
         self.txn = txn
     }
-}
 
-/// Subject identifier used in security events
-public enum SubjectIdentifier: Codable, Sendable {
-    case simple(String)
-    case complex(ComplexSubjectIdentifier)
-    
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        
-        if let stringValue = try? container.decode(String.self) {
-            self = .simple(stringValue)
-        } else {
-            let complexValue = try container.decode(ComplexSubjectIdentifier.self)
-            self = .complex(complexValue)
-        }
-    }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        
-        switch self {
-        case .simple(let value):
-            try container.encode(value)
-        case .complex(let value):
-            try container.encode(value)
-        }
-    }
-}
-
-/// Complex subject identifier for more detailed subject information
-public struct ComplexSubjectIdentifier: Codable, Sendable {
-    /// Subject format (e.g., "email", "phone_number", "iss_sub")
-    public let format: String
-    
-    /// Subject value
-    public let value: String
-    
-    /// Additional subject claims
-    public let additionalClaims: [String: AnyCodable]?
-    
     private enum CodingKeys: String, CodingKey {
-        case format, value
+        case iss, jti, iat, aud, sub_id, events, toe, txn
     }
-    
-    public init(format: String, value: String, additionalClaims: [String: AnyCodable]? = nil) {
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.iss = try container.decode(URL.self, forKey: .iss)
+        self.jti = try container.decode(String.self, forKey: .jti)
+        self.iat = try container.decode(Int64.self, forKey: .iat)
+
+        // RFC 7519 allows "aud" to be a single string or an array of strings
+        if let singleAudience = try? container.decode(String.self, forKey: .aud) {
+            self.aud = [singleAudience]
+        } else {
+            self.aud = try container.decodeIfPresent([String].self, forKey: .aud)
+        }
+
+        self.sub_id = try container.decodeIfPresent(SubjectIdentifier.self, forKey: .sub_id)
+        self.events = try container.decode([String: [String: AnyCodable]].self, forKey: .events)
+        self.toe = try container.decodeIfPresent(Int64.self, forKey: .toe)
+        self.txn = try container.decodeIfPresent(String.self, forKey: .txn)
+    }
+}
+
+/// A Subject Identifier (RFC 9493), including SSF complex subjects.
+///
+/// Every subject is a JSON object with a "format" member; the remaining
+/// members depend on the format. SSF's "complex" format nests further
+/// subject identifiers under member names like "user" and "session".
+public struct SubjectIdentifier: Codable, Sendable {
+    /// The subject identifier format ("email", "iss_sub", "complex", ...)
+    public let format: String
+
+    /// All members other than "format"
+    public let members: [String: AnyCodable]
+
+    public init(format: String, members: [String: AnyCodable] = [:]) {
         self.format = format
-        self.value = value
-        self.additionalClaims = additionalClaims
+        self.members = members
     }
-    
+
+    /// A string-valued member, e.g. `subject.string("email")`
+    public func string(_ member: String) -> String? {
+        members[member]?.value as? String
+    }
+
+    /// A nested subject identifier member of a complex subject,
+    /// e.g. `subject.subject("user")`
+    public func subject(_ member: String) -> SubjectIdentifier? {
+        guard let dictionary = members[member]?.value as? [String: AnyCodable],
+              let format = dictionary["format"]?.value as? String else {
+            return nil
+        }
+        var nested = dictionary
+        nested.removeValue(forKey: "format")
+        return SubjectIdentifier(format: format, members: nested)
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: AnyCodingKey.self)
-        
-        guard let formatKey = AnyCodingKey(stringValue: "format"),
-              let valueKey = AnyCodingKey(stringValue: "value") else {
+
+        guard let formatKey = AnyCodingKey(stringValue: "format") else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Failed to create coding keys"))
         }
-        
+
         self.format = try container.decode(String.self, forKey: formatKey)
-        self.value = try container.decode(String.self, forKey: valueKey)
-        
-        // Decode any additional claims
-        var additionalClaims: [String: AnyCodable] = [:]
-        
-        for key in container.allKeys {
-            if key.stringValue != "format" && key.stringValue != "value" {
-                additionalClaims[key.stringValue] = try container.decode(AnyCodable.self, forKey: key)
-            }
+
+        var members: [String: AnyCodable] = [:]
+        for key in container.allKeys where key.stringValue != "format" {
+            members[key.stringValue] = try container.decode(AnyCodable.self, forKey: key)
         }
-        
-        self.additionalClaims = additionalClaims.isEmpty ? nil : additionalClaims
+        self.members = members
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: AnyCodingKey.self)
         try container.encode(format, forKey: AnyCodingKey(stringValue: "format")!)
-        try container.encode(value, forKey: AnyCodingKey(stringValue: "value")!)
-        
-        // Encode additional claims
-        if let additionalClaims = additionalClaims {
-            for (key, value) in additionalClaims {
-                try container.encode(value, forKey: AnyCodingKey(stringValue: key)!)
-            }
+
+        for (key, value) in members {
+            try container.encode(value, forKey: AnyCodingKey(stringValue: key)!)
         }
     }
 }
 
-/// A type-erased codable value
-public struct AnyCodable: Codable {
+// MARK: - RFC 9493 format constructors
+
+extension SubjectIdentifier {
+    public static func account(uri: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "account", members: ["uri": AnyCodable(uri)])
+    }
+
+    public static func email(_ email: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "email", members: ["email": AnyCodable(email)])
+    }
+
+    public static func phoneNumber(_ phoneNumber: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "phone_number", members: ["phone_number": AnyCodable(phoneNumber)])
+    }
+
+    public static func issSub(iss: String, sub: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "iss_sub", members: ["iss": AnyCodable(iss), "sub": AnyCodable(sub)])
+    }
+
+    public static func opaque(id: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "opaque", members: ["id": AnyCodable(id)])
+    }
+
+    public static func uri(_ uri: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "uri", members: ["uri": AnyCodable(uri)])
+    }
+
+    public static func did(url: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "did", members: ["url": AnyCodable(url)])
+    }
+
+    public static func jwtID(iss: String, jti: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "jwt_id", members: ["iss": AnyCodable(iss), "jti": AnyCodable(jti)])
+    }
+
+    public static func samlAssertionID(issuer: String, assertionID: String) -> SubjectIdentifier {
+        SubjectIdentifier(format: "saml_assertion_id", members: [
+            "issuer": AnyCodable(issuer),
+            "assertion_id": AnyCodable(assertionID),
+        ])
+    }
+
+    public static func aliases(_ identifiers: [SubjectIdentifier]) -> SubjectIdentifier {
+        SubjectIdentifier(format: "aliases", members: [
+            "identifiers": AnyCodable(identifiers.map { AnyCodable($0.asAnyCodableDictionary()) })
+        ])
+    }
+
+    /// SSF complex subject: each member is itself a subject identifier
+    public static func complex(
+        user: SubjectIdentifier? = nil,
+        device: SubjectIdentifier? = nil,
+        session: SubjectIdentifier? = nil,
+        application: SubjectIdentifier? = nil,
+        tenant: SubjectIdentifier? = nil,
+        orgUnit: SubjectIdentifier? = nil,
+        group: SubjectIdentifier? = nil
+    ) -> SubjectIdentifier {
+        var members: [String: AnyCodable] = [:]
+        if let user = user { members["user"] = AnyCodable(user.asAnyCodableDictionary()) }
+        if let device = device { members["device"] = AnyCodable(device.asAnyCodableDictionary()) }
+        if let session = session { members["session"] = AnyCodable(session.asAnyCodableDictionary()) }
+        if let application = application { members["application"] = AnyCodable(application.asAnyCodableDictionary()) }
+        if let tenant = tenant { members["tenant"] = AnyCodable(tenant.asAnyCodableDictionary()) }
+        if let orgUnit = orgUnit { members["org_unit"] = AnyCodable(orgUnit.asAnyCodableDictionary()) }
+        if let group = group { members["group"] = AnyCodable(group.asAnyCodableDictionary()) }
+        return SubjectIdentifier(format: "complex", members: members)
+    }
+
+    private func asAnyCodableDictionary() -> [String: AnyCodable] {
+        var dictionary = members
+        dictionary["format"] = AnyCodable(format)
+        return dictionary
+    }
+}
+
+/// A type-erased codable value. Only ever holds immutable JSON-plist values
+/// (Bool/Int/Double/String and nested arrays/dictionaries of AnyCodable),
+/// so cross-actor sharing is safe despite the `Any` storage.
+public struct AnyCodable: Codable, @unchecked Sendable {
     public let value: Any
     
     public init<T: Codable>(_ value: T) {

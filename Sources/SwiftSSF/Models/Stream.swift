@@ -1,59 +1,88 @@
 import Foundation
 
-/// Event Stream configuration and metadata
-public struct EventStream: Codable, Sendable {
-    /// Stream identifier
-    public let id: String
-    
+/// Stream Configuration (SSF 1.0 §8.1.1)
+public struct StreamConfiguration: Codable, Sendable {
+    /// Transmitter-supplied unique identifier for the stream
+    public let stream_id: String
+
     /// Issuer URL - identifies the transmitter
     public let iss: URL
-    
-    /// Audience - identifies the intended receivers
+
+    /// Audience - identifies the intended receiver(s).
+    /// The spec allows a string or an array of strings on the wire.
     public let aud: [String]
-    
-    /// Events requested in this stream
-    public let events_requested: [String]
-    
-    /// Events supported by the transmitter
+
+    /// Events the transmitter can transmit
     public let events_supported: [String]?
-    
+
+    /// Events requested by the receiver
+    public let events_requested: [String]?
+
+    /// Events the transmitter will actually transmit (transmitter-supplied;
+    /// REQUIRED in the spec, optional here to tolerate draft-era transmitters)
+    public let events_delivered: [String]?
+
     /// Event delivery configuration
-    public let delivery: DeliveryConfiguration
-    
-    /// Stream status
-    public let status: StreamStatus
-    
-    /// Description of the stream
+    public let delivery: DeliveryConfiguration?
+
+    /// Minimum seconds between verification requests the transmitter accepts
+    public let min_verification_interval: Int?
+
+    /// Receiver-supplied description of the stream
     public let description: String?
-    
-    /// When the stream was created
-    public let created_at: Date?
-    
-    /// When the stream was last updated
-    public let updated_at: Date?
-    
+
+    /// Seconds of inactivity after which the transmitter may shut the stream down
+    public let inactivity_timeout: Int?
+
     public init(
-        id: String,
+        stream_id: String,
         iss: URL,
         aud: [String],
-        events_requested: [String],
         events_supported: [String]? = nil,
-        delivery: DeliveryConfiguration,
-        status: StreamStatus = .enabled,
+        events_requested: [String]? = nil,
+        events_delivered: [String]? = nil,
+        delivery: DeliveryConfiguration? = nil,
+        min_verification_interval: Int? = nil,
         description: String? = nil,
-        created_at: Date? = nil,
-        updated_at: Date? = nil
+        inactivity_timeout: Int? = nil
     ) {
-        self.id = id
+        self.stream_id = stream_id
         self.iss = iss
         self.aud = aud
-        self.events_requested = events_requested
         self.events_supported = events_supported
+        self.events_requested = events_requested
+        self.events_delivered = events_delivered
         self.delivery = delivery
-        self.status = status
+        self.min_verification_interval = min_verification_interval
         self.description = description
-        self.created_at = created_at
-        self.updated_at = updated_at
+        self.inactivity_timeout = inactivity_timeout
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stream_id, iss, aud, events_supported, events_requested,
+             events_delivered, delivery, min_verification_interval,
+             description, inactivity_timeout
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.stream_id = try container.decode(String.self, forKey: .stream_id)
+        self.iss = try container.decode(URL.self, forKey: .iss)
+
+        // "aud" may be a single string or an array of strings
+        if let singleAudience = try? container.decode(String.self, forKey: .aud) {
+            self.aud = [singleAudience]
+        } else {
+            self.aud = try container.decode([String].self, forKey: .aud)
+        }
+
+        self.events_supported = try container.decodeIfPresent([String].self, forKey: .events_supported)
+        self.events_requested = try container.decodeIfPresent([String].self, forKey: .events_requested)
+        self.events_delivered = try container.decodeIfPresent([String].self, forKey: .events_delivered)
+        self.delivery = try container.decodeIfPresent(DeliveryConfiguration.self, forKey: .delivery)
+        self.min_verification_interval = try container.decodeIfPresent(Int.self, forKey: .min_verification_interval)
+        self.description = try container.decodeIfPresent(String.self, forKey: .description)
+        self.inactivity_timeout = try container.decodeIfPresent(Int.self, forKey: .inactivity_timeout)
     }
 }
 
@@ -61,177 +90,158 @@ public struct EventStream: Codable, Sendable {
 public struct DeliveryConfiguration: Codable, Sendable {
     /// Delivery method (push or poll)
     public let method: DeliveryMethod
-    
-    /// Endpoint URL for push delivery or poll endpoint
-    public let endpoint_url: URL
-    
-    /// Authorization header for push delivery
+
+    /// For push: the receiver's endpoint, supplied by the receiver.
+    /// For poll: the transmitter's poll endpoint, supplied by the transmitter
+    /// (omit when requesting a poll stream).
+    public let endpoint_url: URL?
+
+    /// Authorization header the transmitter should send with push deliveries
     public let authorization_header: String?
-    
-    /// Additional delivery configuration
-    public let config: [String: AnyCodable]?
-    
+
     public init(
         method: DeliveryMethod,
-        endpoint_url: URL,
-        authorization_header: String? = nil,
-        config: [String: AnyCodable]? = nil
+        endpoint_url: URL? = nil,
+        authorization_header: String? = nil
     ) {
         self.method = method
         self.endpoint_url = endpoint_url
         self.authorization_header = authorization_header
-        self.config = config
     }
 }
 
 /// Event delivery methods
 public enum DeliveryMethod: String, Codable, CaseIterable, Sendable {
-    /// Push-based delivery (webhooks)
+    /// Push-based delivery (RFC 8935)
     case push = "urn:ietf:rfc:8935"
-    
-    /// Poll-based delivery
+
+    /// Poll-based delivery (RFC 8936)
     case poll = "urn:ietf:rfc:8936"
 }
 
-/// Stream status
+/// Stream status (SSF 1.0 §8.1.2: enabled, paused, disabled)
 public enum StreamStatus: String, Codable, CaseIterable, Sendable {
-    /// Stream is enabled and delivering events
+    /// The transmitter transmits events over the stream
     case enabled
-    
-    /// Stream is paused (not delivering events)
+
+    /// The transmitter holds events and does not transmit them
     case paused
-    
-    /// Stream is disabled
+
+    /// The transmitter neither transmits nor holds events
     case disabled
-    
-    /// Stream is being configured
-    case configuring
 }
 
-/// Stream creation request
-public struct CreateStreamRequest: Codable, Sendable {
-    /// Audience - who this stream is for
-    public let aud: [String]
-    
-    /// Events requested
-    public let events_requested: [String]
-    
-    /// Delivery configuration
-    public let delivery: DeliveryConfiguration
-    
-    /// Optional description
-    public let description: String?
-    
-    public init(
-        aud: [String],
-        events_requested: [String],
-        delivery: DeliveryConfiguration,
-        description: String? = nil
-    ) {
-        self.aud = aud
-        self.events_requested = events_requested
-        self.delivery = delivery
-        self.description = description
+/// Stream status endpoint response/update body: {stream_id, status, reason?}
+public struct StreamStatusResponse: Codable, Sendable {
+    public let stream_id: String
+    public let status: StreamStatus
+    public let reason: String?
+
+    public init(stream_id: String, status: StreamStatus, reason: String? = nil) {
+        self.stream_id = stream_id
+        self.status = status
+        self.reason = reason
     }
 }
 
-/// Stream update request
-public struct UpdateStreamRequest: Codable, Sendable {
-    /// Events requested (optional update)
+/// Stream creation request (POST to the configuration endpoint).
+/// All fields are receiver-supplied; the transmitter fills in the rest.
+public struct CreateStreamRequest: Codable, Sendable {
+    /// Events requested
     public let events_requested: [String]?
-    
-    /// Delivery configuration (optional update)
+
+    /// Delivery configuration
     public let delivery: DeliveryConfiguration?
-    
-    /// Stream status (optional update)
-    public let status: StreamStatus?
-    
-    /// Description (optional update)
+
+    /// Optional description
     public let description: String?
-    
+
     public init(
         events_requested: [String]? = nil,
         delivery: DeliveryConfiguration? = nil,
-        status: StreamStatus? = nil,
         description: String? = nil
     ) {
         self.events_requested = events_requested
         self.delivery = delivery
-        self.status = status
         self.description = description
     }
 }
 
-/// Subject management for streams
-public struct StreamSubject: Codable, Sendable {
-    /// Subject identifier
-    public let subject: SubjectIdentifier
-    
-    /// Whether the subject is active in the stream
-    public let active: Bool
-    
-    /// When the subject was added
-    public let added_at: Date?
-    
-    public init(subject: SubjectIdentifier, active: Bool = true, added_at: Date? = nil) {
-        self.subject = subject
-        self.active = active
-        self.added_at = added_at
+/// Stream update request (PATCH to the configuration endpoint).
+/// Identifies the stream in the body per SSF 1.0 §8.1.1.3.
+public struct UpdateStreamRequest: Codable, Sendable {
+    /// The stream to update
+    public let stream_id: String
+
+    /// Events requested (optional update)
+    public let events_requested: [String]?
+
+    /// Delivery configuration (optional update)
+    public let delivery: DeliveryConfiguration?
+
+    /// Description (optional update)
+    public let description: String?
+
+    public init(
+        stream_id: String,
+        events_requested: [String]? = nil,
+        delivery: DeliveryConfiguration? = nil,
+        description: String? = nil
+    ) {
+        self.stream_id = stream_id
+        self.events_requested = events_requested
+        self.delivery = delivery
+        self.description = description
     }
 }
 
-/// Add subject request
+/// Add subject request: {stream_id, subject, verified?}
 public struct AddSubjectRequest: Codable, Sendable {
+    /// The stream to add the subject to
+    public let stream_id: String
+
     /// Subject to add
     public let subject: SubjectIdentifier
-    
-    public init(subject: SubjectIdentifier) {
+
+    /// Whether the receiver has verified its relationship with this subject
+    public let verified: Bool?
+
+    public init(stream_id: String, subject: SubjectIdentifier, verified: Bool? = nil) {
+        self.stream_id = stream_id
         self.subject = subject
+        self.verified = verified
     }
 }
 
-/// Remove subject request
+/// Remove subject request: {stream_id, subject}
 public struct RemoveSubjectRequest: Codable, Sendable {
+    /// The stream to remove the subject from
+    public let stream_id: String
+
     /// Subject to remove
     public let subject: SubjectIdentifier
-    
-    public init(subject: SubjectIdentifier) {
+
+    public init(stream_id: String, subject: SubjectIdentifier) {
+        self.stream_id = stream_id
         self.subject = subject
     }
 }
 
-/// Stream verification request
+/// Stream verification request: {stream_id, state?}.
+///
+/// The transmitter responds 204 No Content and delivers the result
+/// asynchronously as a verification event
+/// (https://schemas.openid.net/secevent/ssf/event-type/verification)
+/// over the stream itself, echoing `state` for correlation.
 public struct VerificationRequest: Codable, Sendable {
-    /// Optional state parameter for verification
+    /// The stream to verify
+    public let stream_id: String
+
+    /// Arbitrary string the transmitter must echo back in the verification event
     public let state: String?
-    
-    public init(state: String? = nil) {
+
+    public init(stream_id: String, state: String? = nil) {
+        self.stream_id = stream_id
         self.state = state
     }
-}
-
-/// Stream verification response
-public struct VerificationResponse: Codable, Sendable {
-    /// Verification status
-    public let status: VerificationStatus
-    
-    /// Optional verification details
-    public let details: String?
-    
-    public init(status: VerificationStatus, details: String? = nil) {
-        self.status = status
-        self.details = details
-    }
-}
-
-/// Verification status
-public enum VerificationStatus: String, Codable, CaseIterable, Sendable {
-    /// Verification successful
-    case verified
-    
-    /// Verification failed
-    case failed
-    
-    /// Verification pending
-    case pending
 }

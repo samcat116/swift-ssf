@@ -1,32 +1,40 @@
 import Foundation
 import Logging
 
-/// Configuration for poll-based event delivery
+/// Configuration for poll-based event delivery (RFC 8936)
 public struct PollDeliveryConfiguration: Sendable {
-    /// Polling interval in seconds
+    /// Polling interval in seconds (skipped while the transmitter reports
+    /// more events available)
     public let pollInterval: TimeInterval
-    
+
     /// Maximum number of events to fetch per poll
     public let maxEventsPerPoll: Int
-    
+
+    /// Whether the transmitter should respond immediately even when no
+    /// events are available. `false` enables long polling (the RFC 8936
+    /// default); make sure the HTTP client timeout accommodates it.
+    public let returnImmediately: Bool
+
     /// Maximum number of poll errors before stopping
     public let maxConsecutiveErrors: Int
-    
+
     /// Backoff strategy for errors
     public let errorBackoffStrategy: BackoffStrategy
-    
+
     /// Whether to continue polling after errors
     public let continueOnError: Bool
-    
+
     public init(
         pollInterval: TimeInterval = 30.0,
         maxEventsPerPoll: Int = 100,
+        returnImmediately: Bool = true,
         maxConsecutiveErrors: Int = 5,
         errorBackoffStrategy: BackoffStrategy = .exponential(base: 2.0, maxDelay: 300.0, multiplier: 1.0),
         continueOnError: Bool = true
     ) {
         self.pollInterval = pollInterval
         self.maxEventsPerPoll = maxEventsPerPoll
+        self.returnImmediately = returnImmediately
         self.maxConsecutiveErrors = maxConsecutiveErrors
         self.errorBackoffStrategy = errorBackoffStrategy
         self.continueOnError = continueOnError
@@ -37,16 +45,16 @@ public struct PollDeliveryConfiguration: Sendable {
 public enum BackoffStrategy: Sendable {
     /// No backoff - retry immediately
     case none
-    
+
     /// Fixed delay between retries
     case fixed(delay: TimeInterval)
-    
+
     /// Exponential backoff
     case exponential(base: Double, maxDelay: TimeInterval, multiplier: Double)
-    
+
     /// Linear backoff
     case linear(increment: TimeInterval, maxDelay: TimeInterval)
-    
+
     /// Calculate delay for given attempt number
     func delay(for attempt: Int) -> TimeInterval {
         switch self {
@@ -67,101 +75,111 @@ public enum BackoffStrategy: Sendable {
 /// Poll-based event delivery service
 public actor PollEventDelivery {
     private let receiver: SSFReceiver
-    private let streamId: String
+    private let endpoint: URL
     private let configuration: PollDeliveryConfiguration
     private let eventHandler: SSFEventHandler
     private let logger = Logger(label: "SwiftSSF.PollEventDelivery")
-    
+
     private var isRunning = false
     private var pollTask: Task<Void, Never>?
     private var consecutiveErrors = 0
-    
+
+    /// - Parameter endpoint: the stream's poll delivery endpoint
+    ///   (`delivery.endpoint_url` from the stream configuration)
     public init(
         receiver: SSFReceiver,
-        streamId: String,
+        endpoint: URL,
         configuration: PollDeliveryConfiguration = PollDeliveryConfiguration(),
         eventHandler: SSFEventHandler
     ) {
         self.receiver = receiver
-        self.streamId = streamId
+        self.endpoint = endpoint
         self.configuration = configuration
         self.eventHandler = eventHandler
     }
-    
+
     /// Start polling for events
     public func start() async {
         guard !isRunning else {
             logger.warning("Poll delivery is already running")
             return
         }
-        
+
         isRunning = true
         consecutiveErrors = 0
-        
-        logger.info("Starting poll-based event delivery for stream \(streamId)")
-        
+
+        logger.info("Starting poll-based event delivery from \(endpoint)")
+
         pollTask = Task {
             await runPollingLoop()
         }
     }
-    
+
     /// Stop polling for events
     public func stop() async {
         guard isRunning else {
             logger.warning("Poll delivery is not running")
             return
         }
-        
-        logger.info("Stopping poll-based event delivery for stream \(streamId)")
-        
+
+        logger.info("Stopping poll-based event delivery from \(endpoint)")
+
         isRunning = false
         pollTask?.cancel()
         pollTask = nil
     }
-    
+
     /// Check if polling is currently running
     public var running: Bool {
         return isRunning
     }
-    
+
     /// Get current consecutive error count
     public var errorCount: Int {
         return consecutiveErrors
     }
-    
+
     // MARK: - Private Methods
-    
+
     private func runPollingLoop() async {
         while isRunning && !Task.isCancelled {
             do {
-                let eventsProcessed = try await receiver.pollEvents(
-                    streamId: streamId,
+                let result = try await receiver.pollEvents(
+                    endpoint: endpoint,
                     maxEvents: configuration.maxEventsPerPoll,
+                    returnImmediately: configuration.returnImmediately,
                     handler: eventHandler
                 )
-                
+
                 // Reset error count on successful poll
                 if consecutiveErrors > 0 {
                     logger.info("Polling recovered after \(consecutiveErrors) consecutive errors")
                     consecutiveErrors = 0
                 }
-                
-                if eventsProcessed > 0 {
-                    logger.debug("Processed \(eventsProcessed) events in poll cycle")
+
+                if result.processed > 0 || result.failed > 0 {
+                    logger.debug("Poll cycle processed \(result.processed) events, \(result.failed) failures")
                 }
-                
+
+                // Drain immediately while the transmitter has more events
+                if result.moreAvailable {
+                    continue
+                }
+
                 // Wait for next poll interval
                 try await Task.sleep(nanoseconds: UInt64(configuration.pollInterval * 1_000_000_000))
-                
+
+            } catch is CancellationError {
+                break
             } catch {
                 consecutiveErrors += 1
                 let ssfError = error as? SSFError ?? SSFError.unknown(error)
-                
+
                 logger.error("Poll error (\(consecutiveErrors)/\(configuration.maxConsecutiveErrors)): \(ssfError.localizedDescription)")
-                
+
                 // Notify error handler
                 await eventHandler.handleError(ssfError, token: nil)
-                
+
                 // Check if we should stop due to too many errors
                 if consecutiveErrors >= configuration.maxConsecutiveErrors {
                     if configuration.continueOnError {
@@ -173,7 +191,7 @@ public actor PollEventDelivery {
                         break
                     }
                 }
-                
+
                 // Apply backoff strategy
                 let backoffDelay = configuration.errorBackoffStrategy.delay(for: consecutiveErrors)
                 if backoffDelay > 0 {
@@ -182,28 +200,46 @@ public actor PollEventDelivery {
                 }
             }
         }
-        
-        logger.info("Poll delivery loop ended for stream \(streamId)")
+
+        logger.info("Poll delivery loop ended for \(endpoint)")
     }
 }
 
 /// Convenience extensions for common polling scenarios
 extension SSFReceiver {
-    /// Start a simple polling service for a stream
+    /// Start a polling service for a stream's poll delivery endpoint
     public func startPolling(
-        streamId: String,
+        endpoint: URL,
         configuration: PollDeliveryConfiguration = PollDeliveryConfiguration(),
         eventHandler: SSFEventHandler
     ) async -> PollEventDelivery {
         let pollService = PollEventDelivery(
             receiver: self,
-            streamId: streamId,
+            endpoint: endpoint,
             configuration: configuration,
             eventHandler: eventHandler
         )
-        
+
         await pollService.start()
         return pollService
+    }
+
+    /// Start a polling service for a stream, using its configured poll endpoint
+    public func startPolling(
+        stream: StreamConfiguration,
+        configuration: PollDeliveryConfiguration = PollDeliveryConfiguration(),
+        eventHandler: SSFEventHandler
+    ) async throws -> PollEventDelivery {
+        guard let delivery = stream.delivery, delivery.method == .poll,
+              let endpoint = delivery.endpoint_url else {
+            throw SSFError.invalidStreamConfiguration("Stream \(stream.stream_id) has no poll delivery endpoint")
+        }
+
+        return await startPolling(
+            endpoint: endpoint,
+            configuration: configuration,
+            eventHandler: eventHandler
+        )
     }
 }
 
@@ -211,12 +247,13 @@ extension SSFReceiver {
 public actor MultiStreamPollManager {
     private var pollServices: [String: PollEventDelivery] = [:]
     private let logger = Logger(label: "SwiftSSF.MultiStreamPollManager")
-    
+
     public init() {}
-    
+
     /// Add a stream to be polled
     public func addStream(
         _ streamId: String,
+        endpoint: URL,
         receiver: SSFReceiver,
         configuration: PollDeliveryConfiguration = PollDeliveryConfiguration(),
         eventHandler: SSFEventHandler
@@ -225,64 +262,64 @@ public actor MultiStreamPollManager {
             logger.warning("Stream \(streamId) is already being polled")
             return
         }
-        
+
         let pollService = PollEventDelivery(
             receiver: receiver,
-            streamId: streamId,
+            endpoint: endpoint,
             configuration: configuration,
             eventHandler: eventHandler
         )
-        
+
         pollServices[streamId] = pollService
         await pollService.start()
-        
+
         logger.info("Added stream \(streamId) to poll manager")
     }
-    
+
     /// Remove a stream from polling
     public func removeStream(_ streamId: String) async {
         guard let pollService = pollServices[streamId] else {
             logger.warning("Stream \(streamId) is not being polled")
             return
         }
-        
+
         await pollService.stop()
         pollServices.removeValue(forKey: streamId)
-        
+
         logger.info("Removed stream \(streamId) from poll manager")
     }
-    
+
     /// Stop all polling services
     public func stopAll() async {
         logger.info("Stopping all poll services")
-        
+
         for (streamId, pollService) in pollServices {
             await pollService.stop()
             logger.debug("Stopped polling for stream \(streamId)")
         }
-        
+
         pollServices.removeAll()
     }
-    
+
     /// Get status of all polling services
     public func getStatus() async -> [String: Bool] {
         var status: [String: Bool] = [:]
-        
+
         for (streamId, pollService) in pollServices {
             status[streamId] = await pollService.running
         }
-        
+
         return status
     }
-    
+
     /// Get error counts for all services
     public func getErrorCounts() async -> [String: Int] {
         var errorCounts: [String: Int] = [:]
-        
+
         for (streamId, pollService) in pollServices {
             errorCounts[streamId] = await pollService.errorCount
         }
-        
+
         return errorCounts
     }
 }
