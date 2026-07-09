@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_e26146433a5dbd::t_ff97c1e815ee4f 1-59
+LICENSE
+  s_e26146433a5dbd::t_eb7c3cf7608d72 1-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "60b38a06d9a99fbfd979bb18ba9276918531365f",
+  "prompts": {},
+  "sessions": {
+    "s_e26146433a5dbd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc96738d-4856-4055-abed-e19c905a6a87",
+        "model": "unknown"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
