@@ -67,23 +67,51 @@ public actor SSFReceiver {
     private let logger: Logger
     
     private var cachedConfiguration: TransmitterConfiguration?
-    
+
+    /// The HTTPClient this receiver created and must shut down; nil when the
+    /// caller injected their own client.
+    private let ownedHTTPClient: HTTPClient?
+
     public init(configuration: SSFReceiverConfiguration) {
         self.configuration = configuration
-        
-        let httpClientInstance = configuration.httpClient ?? HTTPClient(eventLoopGroupProvider: .singleton)
+
+        let httpClientInstance: HTTPClient
+        if let injected = configuration.httpClient {
+            httpClientInstance = injected
+            self.ownedHTTPClient = nil
+        } else {
+            httpClientInstance = HTTPClient(eventLoopGroupProvider: .singleton)
+            self.ownedHTTPClient = httpClientInstance
+        }
+
         self.httpClient = SSFHTTPClient(
             baseURL: configuration.transmitterURL,
             authToken: configuration.authToken,
             httpClient: httpClientInstance
         )
-        
+
         self.jwtProcessor = JWTProcessor()
         self.jwksClient = JWKSClient(httpClient: httpClientInstance)
-        
+
         var logger = Logger(label: "SwiftSSF.Receiver")
         logger.logLevel = configuration.logLevel
         self.logger = logger
+    }
+
+    deinit {
+        // Backstop for callers that never call shutdown(). Capture the client
+        // (not self) so the task doesn't outlive deinit.
+        if let client = ownedHTTPClient {
+            Task { try? await client.shutdown() }
+        }
+    }
+
+    /// Shut down resources owned by this receiver. Safe to call once when the
+    /// receiver is no longer needed; injected HTTP clients are not touched.
+    public func shutdown() async throws {
+        if let client = ownedHTTPClient {
+            try await client.shutdown()
+        }
     }
     
     // MARK: - Stream Management
@@ -195,18 +223,26 @@ public actor SSFReceiver {
         return processedEvents
     }
     
-    /// Process a single SET token
+    /// Process a single SET token.
+    ///
+    /// Throws when validation or handling fails so that delivery layers can
+    /// report the failure to the transmitter (RFC 8935 error responses /
+    /// RFC 8936 setErrs) instead of silently acknowledging a bad SET.
+    /// The handler's `handleError` is still notified before the rethrow.
+    @discardableResult
     public func processSecurityEventToken(
         _ token: String,
         handler: SSFEventHandler
-    ) async {
+    ) async throws -> SecurityEventToken {
         do {
             let securityEventToken = try await parseAndValidateToken(token)
             try await handler.handleEvent(securityEventToken)
+            return securityEventToken
         } catch {
             logger.error("Failed to process security event token: \(error)")
             let ssfError = error as? SSFError ?? SSFError.unknown(error)
             await handler.handleError(ssfError, token: nil)
+            throw ssfError
         }
     }
     

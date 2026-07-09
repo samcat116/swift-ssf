@@ -85,7 +85,6 @@ struct ExampleSSFReceiver {
             let pushServerConfig = PushDeliveryConfiguration(
                 port: 8080,
                 webhookPath: "/ssf/events",
-                validateAuthorization: true,
                 expectedAuthHeader: "Bearer your_webhook_auth_token"
             )
             

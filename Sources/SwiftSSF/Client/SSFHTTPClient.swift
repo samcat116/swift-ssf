@@ -14,22 +14,30 @@ public actor SSFHTTPClient {
     private let jsonDecoder: JSONDecoder
     private let jsonEncoder: JSONEncoder
     
+    /// Whether this instance created (and therefore owns) its HTTPClient
+    private let ownsHTTPClient: Bool
+
     public init(baseURL: URL, authToken: String? = nil, httpClient: HTTPClient? = nil) {
         self.baseURL = baseURL
         self.authToken = authToken
+        self.ownsHTTPClient = (httpClient == nil)
         self.httpClient = httpClient ?? HTTPClient(eventLoopGroupProvider: .singleton)
-        
+
         self.jsonDecoder = JSONDecoder()
         self.jsonEncoder = JSONEncoder()
-        
+
         // Configure JSON coding
         jsonDecoder.dateDecodingStrategy = .secondsSince1970
         jsonEncoder.dateEncodingStrategy = .secondsSince1970
     }
-    
+
     deinit {
-        Task {
-            try? await httpClient.shutdown()
+        // Only shut down a client we created; an injected client is shared
+        // and belongs to the caller. Capture the client (not self) so the
+        // task doesn't outlive deinit with a dangling self reference.
+        if ownsHTTPClient {
+            let client = httpClient
+            Task { try? await client.shutdown() }
         }
     }
     
