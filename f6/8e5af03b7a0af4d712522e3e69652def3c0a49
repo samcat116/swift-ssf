@@ -1,0 +1,34 @@
+Sources/SwiftSSF/SSFReceiver.swift
+  s_9ba4895c256e36::t_db0c397502effb 239-242,248,256
+  s_9ba4895c256e36::t_ab48526e1f7d75 3
+  s_9ba4895c256e36::t_8aded13bdb95e1 298,310
+Tests/SwiftSSFTests/PollDeliveryTests.swift
+  s_9ba4895c256e36::t_50e9383cb8cf49 82-83
+  s_9ba4895c256e36::t_07a36bb209d1fb 1-81,84-133
+README.md
+  s_9ba4895c256e36::t_d41911d9785b8f 39-50
+Sources/SwiftSSF/Delivery/PollEventDelivery.swift
+  s_9ba4895c256e36::t_86905eb8492e7f 2,7-10,18-19,22-27,41,49
+  s_9ba4895c256e36::t_3a62b5978d3dd7 157-161,168,182-185,195-206
+Sources/SwiftSSF/Client/SSFHTTPClient.swift
+  s_9ba4895c256e36::t_8ef3c685b48383 171-181
+  s_9ba4895c256e36::t_ecb6fb4787d454 240-241,246,261-265
+  s_9ba4895c256e36::t_670ce161c418ae 24-26
+  s_9ba4895c256e36::t_34a9e9bc150990 72-73,83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f68e5af03b7a0af4d712522e3e69652def3c0a49",
+  "prompts": {},
+  "sessions": {
+    "s_9ba4895c256e36": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd776a02-3b16-43c9-a517-d8e98c0d25d7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
