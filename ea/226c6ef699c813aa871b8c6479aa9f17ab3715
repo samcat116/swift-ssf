@@ -1,0 +1,21 @@
+.gitignore
+  s_4fc02f5e8166d7::t_e2ea5931513786 1-2
+README.md
+  s_4fc02f5e8166d7::t_af108f489409c9 3,7-11,19-30,33-35,37-66,70-77,81,89,93,95-102,106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ea226c6ef699c813aa871b8c6479aa9f17ab3715",
+  "prompts": {},
+  "sessions": {
+    "s_4fc02f5e8166d7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1e4e4b7-a88a-4614-b6c2-ef51feead1eb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
