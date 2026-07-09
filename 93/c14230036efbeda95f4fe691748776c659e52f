@@ -1,0 +1,38 @@
+Tests/SwiftSSFTests/JWTProcessorTests.swift
+  s_4fc02f5e8166d7::t_121f7309365cbb 5
+  s_4fc02f5e8166d7::t_29be20be2107e3 92,122,153,184
+  s_4fc02f5e8166d7::t_bf4b8aed756fe0 191-364
+Sources/SwiftSSF/JWT/JWKSClient.swift
+  s_4fc02f5e8166d7::t_05f8c24990d420 4,14,18,20,22-26,28,30,33,37,40,44,48-54,56-58,60-84,95,100,104,110,121,124,127,130,133,136,139,142,145,167-198,201
+Sources/SwiftSSF/Models/SSFError.swift
+  s_4fc02f5e8166d7::t_26443aaffe2436 10-16
+  s_4fc02f5e8166d7::t_96025792238b63 77-80
+Sources/SwiftSSF/SSFReceiver.swift
+  s_4fc02f5e8166d7::t_0869ca4a37b47f 242-243,248,251-257,260,263-264,266
+  s_4fc02f5e8166d7::t_58c898b3f1b14b 19-26,29,32,38,46
+Sources/SwiftSSF/Models/SecurityEventToken.swift
+  s_4fc02f5e8166d7::t_9e68f06884cb5c 25-28,31-32
+  s_4fc02f5e8166d7::t_6440666d598bb1 84-106
+Package.swift
+  s_4fc02f5e8166d7::t_181573d35e9249 41
+Tests/SwiftSSFTests/SwiftSSFTests.swift
+  s_4fc02f5e8166d7::t_29be20be2107e3 24,31
+Sources/SwiftSSF/JWT/JWTProcessor.swift
+  s_4fc02f5e8166d7::t_c876d1818eeab5 3,6-14,20,24,29,36,41,43,48,52,55-60,65,68-76,78,82,89,97-99,107,110-121,123-126,131,133-134,139-161,164,173,176,185,189,199,203,206-207,211,224,230,233,241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "93c14230036efbeda95f4fe691748776c659e52f",
+  "prompts": {},
+  "sessions": {
+    "s_4fc02f5e8166d7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1e4e4b7-a88a-4614-b6c2-ef51feead1eb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
