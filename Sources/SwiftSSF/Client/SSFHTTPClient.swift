@@ -13,7 +13,7 @@ import Logging
 public actor SSFHTTPClient {
     private let httpClient: HTTPClient
     private let issuerURL: URL
-    private let authToken: String?
+    private let tokenProvider: SSFTokenProvider?
     private let logger = Logger(label: "SwiftSSF.HTTPClient")
     private let jsonDecoder: JSONDecoder
     private let jsonEncoder: JSONEncoder
@@ -24,9 +24,9 @@ public actor SSFHTTPClient {
     /// Default request timeout for the management API and immediate polls
     public static let defaultTimeout: TimeAmount = .seconds(30)
 
-    public init(baseURL: URL, authToken: String? = nil, httpClient: HTTPClient? = nil) {
+    public init(baseURL: URL, tokenProvider: SSFTokenProvider? = nil, httpClient: HTTPClient? = nil) {
         self.issuerURL = baseURL
-        self.authToken = authToken
+        self.tokenProvider = tokenProvider
         self.ownsHTTPClient = (httpClient == nil)
         self.httpClient = httpClient ?? HTTPClient(eventLoopGroupProvider: .singleton)
 
@@ -36,6 +36,15 @@ public actor SSFHTTPClient {
         // Configure JSON coding
         jsonDecoder.dateDecodingStrategy = .secondsSince1970
         jsonEncoder.dateEncodingStrategy = .secondsSince1970
+    }
+
+    /// Convenience initializer for the trivial single-static-token case.
+    public init(baseURL: URL, authToken: String?, httpClient: HTTPClient? = nil) {
+        self.init(
+            baseURL: baseURL,
+            tokenProvider: authToken.map { StaticTokenProvider(token: $0) },
+            httpClient: httpClient
+        )
     }
 
     deinit {
@@ -58,7 +67,7 @@ public actor SSFHTTPClient {
     ) async throws -> T {
         var request = HTTPClientRequest(url: try appendQuery(url, queryItems).absoluteString)
         request.method = .GET
-        addAuthenticationHeaders(&request)
+        try await addAuthenticationHeaders(&request)
         request.headers.add(name: "Accept", value: "application/json")
 
         return try await performRequest(request, responseType: responseType)
@@ -74,7 +83,7 @@ public actor SSFHTTPClient {
     ) async throws -> U {
         var request = HTTPClientRequest(url: url.absoluteString)
         request.method = method
-        addAuthenticationHeaders(&request)
+        try await addAuthenticationHeaders(&request)
         addJSONHeaders(&request)
 
         let bodyData = try jsonEncoder.encode(body)
@@ -87,7 +96,7 @@ public actor SSFHTTPClient {
     public func delete(url: URL, queryItems: [URLQueryItem] = []) async throws {
         var request = HTTPClientRequest(url: try appendQuery(url, queryItems).absoluteString)
         request.method = .DELETE
-        addAuthenticationHeaders(&request)
+        try await addAuthenticationHeaders(&request)
 
         let response = try await httpClient.execute(request, timeout: .seconds(30))
         try await handleErrorResponse(response)
@@ -224,10 +233,10 @@ public actor SSFHTTPClient {
         return result
     }
 
-    private func addAuthenticationHeaders(_ request: inout HTTPClientRequest) {
-        if let authToken = authToken {
-            request.headers.add(name: "Authorization", value: "Bearer \(authToken)")
-        }
+    private func addAuthenticationHeaders(_ request: inout HTTPClientRequest) async throws {
+        guard let tokenProvider = tokenProvider else { return }
+        let token = try await tokenProvider.accessToken()
+        request.headers.add(name: "Authorization", value: "Bearer \(token)")
     }
 
     private func addJSONHeaders(_ request: inout HTTPClientRequest) {

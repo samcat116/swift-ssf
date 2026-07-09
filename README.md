@@ -63,6 +63,34 @@ let server = try await receiver.startPushServer(
 )
 ```
 
+### Authenticating to the management API
+
+The `authToken` shown above is the trivial single-static-token case. To use an
+OAuth 2.0 client-credentials flow, token refresh, or any other scheme the
+transmitter advertises via `authorization_schemes` (SSF 1.0 §7.1), supply a
+`tokenProvider` instead. Its `accessToken()` is called before each management
+request, so short-lived tokens can refresh transparently:
+
+```swift
+struct OAuthTokenProvider: SSFTokenProvider {
+    var schemeURN: String? { "urn:ietf:rfc:6749" }  // validated against the transmitter's metadata
+
+    func accessToken() async throws -> String {
+        // fetch/refresh via your OAuth client-credentials flow (cache internally)
+        try await myOAuthClient.currentAccessToken()
+    }
+}
+
+let receiver = SSFReceiver(configuration: .init(
+    transmitterURL: URL(string: "https://transmitter.example.com")!,
+    tokenProvider: OAuthTokenProvider(),
+    expectedAudience: ["your-receiver-id"]
+))
+```
+
+When `schemeURN` is set and the transmitter doesn't advertise it in
+`authorization_schemes`, the receiver logs a warning (it doesn't fail).
+
 Handle events by conforming to `SSFEventHandler`:
 
 ```swift
