@@ -33,6 +33,56 @@ final class SwiftSSFTests: XCTestCase {
         XCTAssertFalse(config.allowUnverifiedTokens)
     }
     
+    func testSSFReceiverConfigurationWithTokenProvider() throws {
+        let transmitterURL = URL(string: "https://transmitter.example.com")!
+        let provider = StaticTokenProvider(token: "oauth-token", schemeURN: "urn:ietf:rfc:6749")
+
+        let config = SSFReceiverConfiguration(
+            transmitterURL: transmitterURL,
+            tokenProvider: provider
+        )
+
+        XCTAssertNil(config.authToken)
+        XCTAssertNotNil(config.tokenProvider)
+        XCTAssertEqual(config.tokenProvider?.schemeURN, "urn:ietf:rfc:6749")
+    }
+
+    func testStaticTokenProvider() async throws {
+        let provider = StaticTokenProvider(token: "static-token")
+        let token = try await provider.accessToken()
+        XCTAssertEqual(token, "static-token")
+        XCTAssertNil(provider.schemeURN)
+    }
+
+    func testStaticTokenProviderWithScheme() async throws {
+        let provider = StaticTokenProvider(token: "static-token", schemeURN: "urn:ietf:rfc:6749")
+        let token = try await provider.accessToken()
+        XCTAssertEqual(token, "static-token")
+        XCTAssertEqual(provider.schemeURN, "urn:ietf:rfc:6749")
+    }
+
+    func testCustomTokenProvider() async throws {
+        struct CountingProvider: SSFTokenProvider {
+            let counter: Counter
+            var schemeURN: String? { "urn:ietf:rfc:6749" }
+            func accessToken() async throws -> String {
+                "token-\(await counter.next())"
+            }
+        }
+
+        actor Counter {
+            private var value = 0
+            func next() -> Int { value += 1; return value }
+        }
+
+        let provider = CountingProvider(counter: Counter())
+        let first = try await provider.accessToken()
+        let second = try await provider.accessToken()
+        XCTAssertEqual(first, "token-1")
+        XCTAssertEqual(second, "token-2")
+        XCTAssertEqual(provider.schemeURN, "urn:ietf:rfc:6749")
+    }
+
     func testSSFErrorTypes() throws {
         let networkError = SSFError.networkError(URLError(.notConnectedToInternet))
         let httpError = SSFError.httpError(statusCode: 404, message: "Not Found")
