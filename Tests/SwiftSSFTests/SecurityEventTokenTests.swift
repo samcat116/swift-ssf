@@ -6,7 +6,7 @@ final class SecurityEventTokenTests: XCTestCase {
     
     func testSecurityEventTokenCreation() throws {
         let issuer = URL(string: "https://transmitter.example.com")!
-        let events: [String: SecurityEvent] = [:]
+        let events: [String: [String: AnyCodable]] = [:]
         
         let payload = SecurityEventPayload(
             iss: issuer,

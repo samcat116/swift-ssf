@@ -51,7 +51,7 @@ final class JWTProcessorTests: XCTestCase {
         
         let issuer = URL(string: "https://transmitter.example.com")!
         let audience = ["test-receiver"]
-        let events: [String: SecurityEvent] = [:]
+        let events: [String: [String: AnyCodable]] = [:]
         
         let token = try await processor.createSecurityEventToken(
             issuer: issuer,
@@ -73,7 +73,7 @@ final class JWTProcessorTests: XCTestCase {
         
         let issuer = URL(string: "https://transmitter.example.com")!
         let audience = ["test-receiver"]
-        let events: [String: SecurityEvent] = [:]
+        let events: [String: [String: AnyCodable]] = [:]
         
         // Create a token
         let token = try await processor.createSecurityEventToken(
@@ -102,7 +102,7 @@ final class JWTProcessorTests: XCTestCase {
         
         let issuer = URL(string: "https://transmitter.example.com")!
         let audience = ["test-receiver"]
-        let events: [String: SecurityEvent] = [:]
+        let events: [String: [String: AnyCodable]] = [:]
         
         // Create a token with one key
         let token = try await processor.createSecurityEventToken(
@@ -133,7 +133,7 @@ final class JWTProcessorTests: XCTestCase {
         let issuer = URL(string: "https://transmitter.example.com")!
         let wrongIssuer = URL(string: "https://wrong.example.com")!
         let audience = ["test-receiver"]
-        let events: [String: SecurityEvent] = [:]
+        let events: [String: [String: AnyCodable]] = [:]
         
         // Create a token
         let token = try await processor.createSecurityEventToken(
@@ -164,7 +164,7 @@ final class JWTProcessorTests: XCTestCase {
         let issuer = URL(string: "https://transmitter.example.com")!
         let audience = ["test-receiver"]
         let wrongAudience = ["wrong-receiver"]
-        let events: [String: SecurityEvent] = [:]
+        let events: [String: [String: AnyCodable]] = [:]
         
         // Create a token
         let token = try await processor.createSecurityEventToken(

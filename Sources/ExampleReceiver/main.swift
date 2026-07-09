@@ -192,7 +192,7 @@ struct ExampleEventHandler: SSFEventHandler {
         }
     }
     
-    private func handleSpecificEvent(eventType: String, event: SecurityEvent) async {
+    private func handleSpecificEvent(eventType: String, event: [String: AnyCodable]) async {
         // Handle CAEP events
         if eventType.contains("caep") {
             if eventType.contains("session-revoked") {
