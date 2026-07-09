@@ -1,0 +1,29 @@
+Tests/SwiftSSFTests/StreamLifecycleTests.swift
+  s_5a81a3b69062ac::t_2aa2ee270edfcb 358-361,363-364,367,369
+  s_5a81a3b69062ac::t_36f591676fb72c 357,362,365-366,368,370-378
+  s_5a81a3b69062ac::t_52341604466564 56-65
+  s_5a81a3b69062ac::t_c129df6f4608e1 28-29
+  s_5a81a3b69062ac::t_ae8ef2d3fb4459 107
+  s_5a81a3b69062ac::t_9cbf8067e2fb1b 127-129,134
+  s_5a81a3b69062ac::t_c592675742705e 168-169
+Sources/SwiftSSF/SSFReceiver.swift
+  s_5a81a3b69062ac::t_62e34833b253ef 360-365
+  s_5a81a3b69062ac::t_e94017a340452c 296-299,319-322
+  s_5a81a3b69062ac::t_1c9e5b61bb6d3e 323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "464cf13b8f3541f68a4578a06d72b369dacaf3fe",
+  "prompts": {},
+  "sessions": {
+    "s_5a81a3b69062ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b58d5d3-21ca-4e53-a37e-800a903858c9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
