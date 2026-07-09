@@ -8,8 +8,19 @@ public struct SSFReceiverConfiguration: Sendable {
     /// The transmitter's issuer URL (used for discovery)
     public let transmitterURL: URL
 
-    /// Authentication token for API calls
+    /// Authentication token for API calls.
+    ///
+    /// Convenience for the single-static-token case; equivalent to supplying a
+    /// `StaticTokenProvider`. Ignored when `tokenProvider` is also set.
     public let authToken: String?
+
+    /// Supplies bearer tokens for the management API (SSF 1.0 §7.1).
+    ///
+    /// Takes precedence over `authToken`. Plug in an OAuth 2.0
+    /// client-credentials flow, token refresh, etc. When its `schemeURN` is
+    /// set, the receiver validates it against the transmitter's advertised
+    /// `authorization_schemes` and warns on mismatch.
+    public let tokenProvider: SSFTokenProvider?
 
     /// Expected issuer URL (defaults to transmitterURL)
     public let expectedIssuer: URL?
@@ -33,6 +44,7 @@ public struct SSFReceiverConfiguration: Sendable {
     public init(
         transmitterURL: URL,
         authToken: String? = nil,
+        tokenProvider: SSFTokenProvider? = nil,
         expectedIssuer: URL? = nil,
         expectedAudience: [String]? = nil,
         allowUnverifiedTokens: Bool = false,
@@ -41,6 +53,7 @@ public struct SSFReceiverConfiguration: Sendable {
     ) {
         self.transmitterURL = transmitterURL
         self.authToken = authToken
+        self.tokenProvider = tokenProvider
         self.expectedIssuer = expectedIssuer ?? transmitterURL
         self.expectedAudience = expectedAudience
         self.allowUnverifiedTokens = allowUnverifiedTokens
@@ -78,6 +91,11 @@ public actor SSFReceiver {
     private let jwksClient: JWKSClient
     private let logger: Logger
 
+    /// The token provider actually used for the management API, resolved from
+    /// `configuration.tokenProvider` (preferred) or a `StaticTokenProvider`
+    /// wrapping `configuration.authToken`.
+    private let tokenProvider: SSFTokenProvider?
+
     private var cachedConfiguration: TransmitterConfiguration?
 
     /// Active `lifecycleEvents()` subscriptions, keyed by an incrementing id so
@@ -101,9 +119,13 @@ public actor SSFReceiver {
             self.ownedHTTPClient = httpClientInstance
         }
 
+        let resolvedProvider = configuration.tokenProvider
+            ?? configuration.authToken.map { StaticTokenProvider(token: $0) }
+        self.tokenProvider = resolvedProvider
+
         self.httpClient = SSFHTTPClient(
             baseURL: configuration.transmitterURL,
-            authToken: configuration.authToken,
+            tokenProvider: resolvedProvider,
             httpClient: httpClientInstance
         )
 
@@ -454,8 +476,27 @@ public actor SSFReceiver {
 
         logger.info("Fetching transmitter configuration")
         let config = try await httpClient.getConfiguration()
+        validateAuthorizationScheme(against: config)
         cachedConfiguration = config
         return config
+    }
+
+    /// Warn (but don't fail) when the configured token provider declares a
+    /// scheme the transmitter doesn't advertise in `authorization_schemes`
+    /// (SSF 1.0 §7.1). A missing `authorization_schemes` field or a provider
+    /// without a declared `schemeURN` is treated as "nothing to check".
+    private func validateAuthorizationScheme(against config: TransmitterConfiguration) {
+        guard let schemeURN = tokenProvider?.schemeURN,
+              let advertised = config.authorization_schemes else {
+            return
+        }
+
+        if !advertised.contains(where: { $0.spec_urn == schemeURN }) {
+            let supported = advertised.map(\.spec_urn).joined(separator: ", ")
+            logger.warning(
+                "Configured authorization scheme \(schemeURN) is not among the transmitter's advertised authorization_schemes [\(supported)]"
+            )
+        }
     }
 
     /// Get supported delivery methods
