@@ -267,16 +267,22 @@ public actor PollEventDelivery {
                 // A restart or manual stop superseded us while this poll ran.
                 if self.generation != generation { break }
 
-                // The observer flagged a paused/disabled status during this
-                // cycle, and `pollEvents` returned — so the status SET was
-                // acknowledged. Only now publish the stopped state and exit: no
-                // further poll, and no restart raced against an unacked SET.
+                // Drain everything the transmitter has queued before acting on a
+                // status change: a paused/disabled and a follow-up enabled can be
+                // split across responses by `maxEventsPerPoll`, and the enabled
+                // must be able to clear the pending stop before we honor it.
+                if result.moreAvailable {
+                    continue
+                }
+
+                // Nothing more is queued. The status SET (if any) has now been
+                // handled and acked by `pollEvents`, so it's safe to publish the
+                // stopped state and exit — no restart raced against an unacked SET.
                 if consumeStatusStop() { break }
 
-                // Drain immediately while the transmitter has more events. When
-                // long polling, the transmitter paces us by holding the
+                // When long polling, the transmitter paces us by holding the
                 // connection open, so poll again immediately without sleeping.
-                if result.moreAvailable || isLongPolling {
+                if isLongPolling {
                     continue
                 }
 

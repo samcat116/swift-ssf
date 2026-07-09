@@ -439,12 +439,19 @@ public actor SSFReceiver {
 
         // Acknowledge outcomes with an ack-only request (maxEvents: 0)
         if !acks.isEmpty || !errs.isEmpty {
-            _ = try await httpClient.pollEvents(endpoint: endpoint, PollRequest(
-                maxEvents: 0,
-                returnImmediately: true,
-                ack: acks.isEmpty ? nil : acks,
-                setErrs: errs.isEmpty ? nil : errs
-            ))
+            do {
+                _ = try await httpClient.pollEvents(endpoint: endpoint, PollRequest(
+                    maxEvents: 0,
+                    returnImmediately: true,
+                    ack: acks.isEmpty ? nil : acks,
+                    setErrs: errs.isEmpty ? nil : errs
+                ))
+            } catch {
+                // Surface ack failures distinctly. The ack-only request uses an
+                // immediate timeout, so on long-poll streams a failure here would
+                // otherwise look identical to a benign empty long-poll timeout.
+                throw SSFError.acknowledgementFailed(error)
+            }
             logger.debug("Acknowledged \(acks.count) events, reported \(errs.count) failures")
         }
 

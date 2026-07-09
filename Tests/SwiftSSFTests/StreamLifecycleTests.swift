@@ -17,6 +17,9 @@ final class MockTransmitter: @unchecked Sendable {
     final class SharedState: @unchecked Sendable {
         private let lock = NSLock()
         private var _queued: [String] = []
+        /// Staged poll responses, each a set of SETs plus a moreAvailable flag.
+        /// Consumed one per poll before the flat `_queued` fallback.
+        private var _batches: [(sets: [String], more: Bool)] = []
         /// SET to enqueue for delivery whenever a verification request arrives.
         private var _onVerify: String?
         private var _verifyCount = 0
@@ -31,6 +34,11 @@ final class MockTransmitter: @unchecked Sendable {
         func enqueue(_ set: String) {
             lock.lock(); defer { lock.unlock() }
             _queued.append(set)
+        }
+
+        func enqueueBatch(_ sets: [String], more: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            _batches.append((sets, more))
         }
 
         func recordAck(_ body: String) {
@@ -80,12 +88,16 @@ final class MockTransmitter: @unchecked Sendable {
             if let set = _onVerify { _queued.append(set) }
         }
 
-        /// Drain and return all queued SETs.
-        func drain() -> [String] {
+        /// The next poll response: a staged batch if any, else all flat-queued
+        /// SETs (with moreAvailable = false).
+        func nextResponse() -> (sets: [String], more: Bool) {
             lock.lock(); defer { lock.unlock() }
+            if !_batches.isEmpty {
+                return _batches.removeFirst()
+            }
             let out = _queued
             _queued.removeAll()
-            return out
+            return (out, false)
         }
     }
 
@@ -100,6 +112,7 @@ final class MockTransmitter: @unchecked Sendable {
     }
 
     func enqueue(_ set: String) { state.enqueue(set) }
+    func enqueueBatch(_ sets: [String], more: Bool) { state.enqueueBatch(sets, more: more) }
     func deliverOnVerify(_ set: String?) { state.setOnVerify(set) }
     var verifyCount: Int { state.verifyCount }
     var ackBodies: [String] { state.ackBodies }
@@ -185,12 +198,14 @@ final class MockTransmitter: @unchecked Sendable {
                     }
                     return
                 }
-                let sets = state.drain()
+                let response = state.nextResponse()
                 var entries: [String] = []
-                for (i, set) in sets.enumerated() {
+                for (i, set) in response.sets.enumerated() {
                     entries.append("\"jti-\(i)\":\"\(set)\"")
                 }
-                writeJSON(context: context, status: .ok, body: "{\"sets\":{\(entries.joined(separator: ","))}}")
+                let moreField = response.more ? ",\"moreAvailable\":true" : ""
+                writeJSON(context: context, status: .ok,
+                          body: "{\"sets\":{\(entries.joined(separator: ","))}\(moreField)}")
 
             default:
                 writeEmpty(context: context, status: .notFound)
@@ -482,6 +497,43 @@ final class StreamLifecycleTests: XCTestCase {
         let running = await poller.running
         let stoppedBy = await poller.stoppedByTransmitterStatus
         XCTAssertTrue(running, "An enabled status must not stop the poller")
+        XCTAssertNil(stoppedBy)
+    }
+
+    func testPollDeliveryDrainsMoreAvailableBeforeStopping() async throws {
+        let transmitter = MockTransmitter()
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+        let issuer = transmitter.baseURL
+        let pollEndpoint = issuer.appendingPathComponent("poll")
+
+        // A paused update arrives with moreAvailable=true; the follow-up enabled
+        // is only in the next response. The poller must drain that before acting,
+        // so the enabled clears the pending stop and it keeps running.
+        transmitter.enqueueBatch([try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.streamUpdated: ["status": AnyCodable("paused")]
+        ], streamID: "stream-1")], more: true)
+        transmitter.enqueueBatch([try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.streamUpdated: ["status": AnyCodable("enabled")]
+        ], streamID: "stream-1")], more: false)
+
+        let handler = RecordingEventHandler()
+        let poller = await receiver.startPolling(
+            endpoint: pollEndpoint,
+            streamID: "stream-1",
+            configuration: PollDeliveryConfiguration(pollInterval: 0.1),
+            eventHandler: handler
+        )
+        defer { Task { await poller.stop() } }
+
+        // Both SETs delivered; give the loop a moment past the drain.
+        try await waitFor(timeout: 5) { handler.events.count >= 2 }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let running = await poller.running
+        let stoppedBy = await poller.stoppedByTransmitterStatus
+        XCTAssertTrue(running, "A follow-up enabled in the drained batch must keep the poller running")
         XCTAssertNil(stoppedBy)
     }
 
