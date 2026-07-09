@@ -616,6 +616,38 @@ final class StreamLifecycleTests: XCTestCase {
         XCTAssertNil(stoppedBy)
     }
 
+    func testPollDeliveryIgnoresStatusWithoutStreamIDWhenStreamKnown() async throws {
+        let transmitter = MockTransmitter()
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+        let issuer = transmitter.baseURL
+        let pollEndpoint = issuer.appendingPathComponent("poll")
+
+        // A disabled update with no opaque sub_id is invalid for stream-updated;
+        // a poller that knows its stream id must not let it stop it.
+        transmitter.enqueue(try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.streamUpdated: ["status": AnyCodable("disabled")]
+        ]))  // no streamID
+
+        let handler = RecordingEventHandler()
+        let poller = await receiver.startPolling(
+            endpoint: pollEndpoint,
+            streamID: "stream-1",
+            configuration: PollDeliveryConfiguration(pollInterval: 0.1),
+            eventHandler: handler
+        )
+        defer { Task { await poller.stop() } }
+
+        try await waitFor(timeout: 5) { handler.events.isEmpty == false }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let running = await poller.running
+        let stoppedBy = await poller.stoppedByTransmitterStatus
+        XCTAssertTrue(running, "A status SET without a stream sub_id must not stop a stream-aware poller")
+        XCTAssertNil(stoppedBy)
+    }
+
     func testPollDeliveryIgnoresStatusWhenReactionDisabled() async throws {
         let transmitter = MockTransmitter()
         try await transmitter.start()

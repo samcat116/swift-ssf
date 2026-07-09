@@ -360,9 +360,11 @@ public actor PollEventDelivery {
                 continue
             }
 
-            // If we know our stream id and the SET names a (different) stream,
-            // it's for another stream sharing this endpoint — ignore it.
-            if let streamID, let eventStreamID = event.streamID, eventStreamID != streamID {
+            // If we know our stream id, require the SET to name exactly it. A
+            // `stream-updated` SET must carry the stream's opaque `sub_id`, so a
+            // mismatch — or a missing/invalid one — means the event isn't for us
+            // (e.g. another stream sharing this endpoint) and must not stop us.
+            if let streamID, event.streamID != streamID {
                 continue
             }
 
