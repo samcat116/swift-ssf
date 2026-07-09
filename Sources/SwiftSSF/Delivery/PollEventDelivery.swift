@@ -106,8 +106,15 @@ public actor PollEventDelivery {
     private var consecutiveErrors = 0
 
     /// The transmitter-reported status that stopped this delivery, or nil while
-    /// it is running or after a manual `stop()`.
+    /// it is running or after a manual `stop()`. Published only after the poll
+    /// cycle carrying the status SET has acked it.
     private var stoppedStatus: StreamStatus?
+
+    /// A paused/disabled status the observer has seen but that the poll loop has
+    /// not yet acted on. The loop consumes it after finishing (and acking) the
+    /// current `pollEvents` cycle, so the stopped state isn't published — and a
+    /// restart isn't invited — until the status SET is acknowledged.
+    private var pendingStopStatus: StreamStatus?
 
     /// Identifies the currently-active poll loop / observer. Each `start()`
     /// begins a new generation, and any stop (manual or status-triggered)
@@ -176,11 +183,25 @@ public actor PollEventDelivery {
     /// callers can tell an auto-stop from a manual one.
     private func teardown() {
         isRunning = false
+        pendingStopStatus = nil
         generation += 1
         pollTask?.cancel()
         pollTask = nil
         statusObserverTask?.cancel()
         statusObserverTask = nil
+    }
+
+    /// If the observer flagged a paused/disabled status, publish the stopped
+    /// state now — after the current poll's ack — and report that the loop
+    /// should exit. Runs synchronously with the loop's `break`, so `running`
+    /// and `stoppedByTransmitterStatus` only change once the loop has left and
+    /// the status SET is acknowledged.
+    private func consumeStatusStop() -> Bool {
+        guard let status = pendingStopStatus else { return false }
+        stoppedStatus = status
+        pendingStopStatus = nil
+        isRunning = false
+        return true
     }
 
     /// Check if polling is currently running
@@ -211,6 +232,10 @@ public actor PollEventDelivery {
             : SSFHTTPClient.defaultTimeout
 
         while self.generation == generation && !Task.isCancelled {
+            // A status stop flagged on a previous iteration (e.g. one whose ack
+            // failed) takes effect here, before polling again.
+            if consumeStatusStop() { break }
+
             do {
                 let result = try await receiver.pollEvents(
                     endpoint: endpoint,
@@ -230,10 +255,14 @@ public actor PollEventDelivery {
                     logger.debug("Poll cycle processed \(result.processed) events, \(result.failed) failures")
                 }
 
-                // A graceful stop (or a restart that superseded us) advanced the
-                // generation while this poll was handling/acking its SETs. Exit
-                // now the ack is done, without polling again.
+                // A restart or manual stop superseded us while this poll ran.
                 if self.generation != generation { break }
+
+                // The observer flagged a paused/disabled status during this
+                // cycle. The ack has now completed, so publish the stopped state
+                // and exit — no further poll, and no restart raced against an
+                // unacked SET.
+                if consumeStatusStop() { break }
 
                 // Drain immediately while the transmitter has more events. When
                 // long polling, the transmitter paces us by holding the
@@ -319,16 +348,14 @@ public actor PollEventDelivery {
             switch updated.status {
             case .paused, .disabled:
                 let detail = updated.reason.map { " (\($0))" } ?? ""
-                logger.info("Transmitter reported stream \(updated.status.rawValue)\(detail); stopping polling for \(endpoint)")
-                stoppedStatus = updated.status
-                // Request a graceful stop rather than cancelling the in-flight
-                // poll: the SET carrying this status is broadcast before it is
-                // handled and acked, so cancelling now would abort its ack and
-                // let the transmitter redeliver it. Advancing the generation
-                // makes the current poll loop exit after its cycle completes,
-                // and prevents this stop from ever affecting a later restart.
-                isRunning = false
-                self.generation += 1
+                logger.info("Transmitter reported stream \(updated.status.rawValue)\(detail); will stop polling \(endpoint) once the current cycle acks")
+                // Only flag the status. The poll loop publishes the stopped
+                // state after it finishes handling and acking the current
+                // cycle, so `running`/`stoppedByTransmitterStatus` don't flip —
+                // and a restart isn't invited — until the status SET has been
+                // acknowledged. Don't cancel the in-flight poll: that would
+                // abort the ack and let the transmitter redeliver it.
+                pendingStopStatus = updated.status
                 return
             case .enabled:
                 continue  // already polling; nothing to do
