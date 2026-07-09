@@ -16,22 +16,26 @@ public struct SSFReceiverConfiguration: Sendable {
     
     /// Expected audience identifiers
     public let expectedAudience: [String]?
-    
-    /// Automatic JWKS fetching and caching
-    public let autoFetchJWKS: Bool
-    
+
+    /// Accept SETs without verifying their signature.
+    ///
+    /// This defaults to `false` and should stay `false` outside of tests:
+    /// with verification disabled, anyone who can reach the receiver can
+    /// inject fabricated security events.
+    public let allowUnverifiedTokens: Bool
+
     /// HTTP client configuration
     public let httpClient: HTTPClient?
-    
+
     /// Logging level
     public let logLevel: Logger.Level
-    
+
     public init(
         transmitterURL: URL,
         authToken: String? = nil,
         expectedIssuer: URL? = nil,
         expectedAudience: [String]? = nil,
-        autoFetchJWKS: Bool = true,
+        allowUnverifiedTokens: Bool = false,
         httpClient: HTTPClient? = nil,
         logLevel: Logger.Level = .info
     ) {
@@ -39,7 +43,7 @@ public struct SSFReceiverConfiguration: Sendable {
         self.authToken = authToken
         self.expectedIssuer = expectedIssuer ?? transmitterURL
         self.expectedAudience = expectedAudience
-        self.autoFetchJWKS = autoFetchJWKS
+        self.allowUnverifiedTokens = allowUnverifiedTokens
         self.httpClient = httpClient
         self.logLevel = logLevel
     }
@@ -62,7 +66,6 @@ public actor SSFReceiver {
     private let jwksClient: JWKSClient
     private let logger: Logger
     
-    private var cachedJWKS: JWKSet?
     private var cachedConfiguration: TransmitterConfiguration?
     
     public init(configuration: SSFReceiverConfiguration) {
@@ -236,50 +239,33 @@ public actor SSFReceiver {
     // MARK: - Private Methods
     
     private func parseAndValidateToken(_ token: String) async throws -> SecurityEventToken {
-        let publicKey = try await getValidationKey(for: token)
-        
+        let key = try await validationKey(for: token)
+
         return try await jwtProcessor.parseSecurityEventToken(
             token,
             expectedIssuer: configuration.expectedIssuer,
             expectedAudience: configuration.expectedAudience,
-            publicKey: publicKey
+            key: key
         )
     }
-    
-    private func getValidationKey(for token: String) async throws -> P256.Signing.PublicKey? {
-        guard configuration.autoFetchJWKS else {
+
+    /// Resolve the verification key for a SET. Fails closed: unless the
+    /// configuration explicitly allows unverified tokens, an unresolvable
+    /// key is an error, never a silent skip.
+    private func validationKey(for token: String) async throws -> JWTVerificationKey? {
+        if configuration.allowUnverifiedTokens {
+            logger.warning("allowUnverifiedTokens is enabled; accepting SET without signature verification")
             return nil
         }
-        
-        // Parse token to get key ID
+
         let (header, _) = try await jwtProcessor.parseJWT(token)
-        
-        guard let keyId = header.kid else {
-            logger.warning("JWT does not contain key ID, skipping signature verification")
-            return nil
-        }
-        
-        // Get JWKS
-        let jwks = try await getJWKS()
-        
-        // Find the specific key
-        return try await jwksClient.getPublicKey(jwks: jwks, keyId: keyId)
-    }
-    
-    private func getJWKS() async throws -> JWKSet {
-        if let cached = cachedJWKS {
-            return cached
-        }
-        
         let config = try await getTransmitterConfiguration()
-        let jwks = try await jwksClient.fetchJWKS(from: config.jwks_uri)
-        cachedJWKS = jwks
-        return jwks
+
+        return try await jwksClient.verificationKey(forKeyID: header.kid, jwksURI: config.jwks_uri)
     }
-    
+
     /// Clear cached data
     public func clearCache() async {
-        cachedJWKS = nil
         cachedConfiguration = nil
         await jwksClient.clearCache()
         logger.debug("Cleared all caches")

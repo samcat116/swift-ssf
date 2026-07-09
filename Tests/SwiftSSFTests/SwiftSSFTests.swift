@@ -21,14 +21,14 @@ final class SwiftSSFTests: XCTestCase {
             transmitterURL: transmitterURL,
             authToken: "test-token",
             expectedAudience: ["test-receiver"],
-            autoFetchJWKS: true
+            allowUnverifiedTokens: false
         )
         
         XCTAssertEqual(config.transmitterURL, transmitterURL)
         XCTAssertEqual(config.authToken, "test-token")
         XCTAssertEqual(config.expectedAudience, ["test-receiver"])
         XCTAssertEqual(config.expectedIssuer, transmitterURL)
-        XCTAssertTrue(config.autoFetchJWKS)
+        XCTAssertFalse(config.allowUnverifiedTokens)
     }
     
     func testSSFErrorTypes() throws {

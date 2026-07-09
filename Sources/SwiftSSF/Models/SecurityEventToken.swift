@@ -22,14 +22,14 @@ public struct SecurityEventToken: Codable, Sendable {
 public struct JWTHeader: Codable, Sendable {
     /// Algorithm used for signing
     public let alg: String
-    
-    /// Token type (always "JWT")
-    public let typ: String
-    
+
+    /// Token type ("secevent+jwt" for SETs, per RFC 8417)
+    public let typ: String?
+
     /// Key ID used for signing
     public let kid: String?
-    
-    public init(alg: String, typ: String = "JWT", kid: String? = nil) {
+
+    public init(alg: String, typ: String? = "secevent+jwt", kid: String? = nil) {
         self.alg = alg
         self.typ = typ
         self.kid = kid
@@ -80,6 +80,29 @@ public struct SecurityEventPayload: Codable, Sendable {
         self.events = events
         self.toe = toe
         self.txn = txn
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case iss, jti, iat, aud, sub_id, events, toe, txn
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.iss = try container.decode(URL.self, forKey: .iss)
+        self.jti = try container.decode(String.self, forKey: .jti)
+        self.iat = try container.decode(Int64.self, forKey: .iat)
+
+        // RFC 7519 allows "aud" to be a single string or an array of strings
+        if let singleAudience = try? container.decode(String.self, forKey: .aud) {
+            self.aud = [singleAudience]
+        } else {
+            self.aud = try container.decodeIfPresent([String].self, forKey: .aud)
+        }
+
+        self.sub_id = try container.decodeIfPresent(SubjectIdentifier.self, forKey: .sub_id)
+        self.events = try container.decode([String: [String: AnyCodable]].self, forKey: .events)
+        self.toe = try container.decodeIfPresent(Int64.self, forKey: .toe)
+        self.txn = try container.decodeIfPresent(String.self, forKey: .txn)
     }
 }
 

@@ -7,7 +7,13 @@ public enum SSFError: Error, LocalizedError, Sendable {
     
     /// JWT signature verification failed
     case signatureVerificationFailed
-    
+
+    /// The JWT uses a signing algorithm the verification key doesn't match
+    case unsupportedAlgorithm(String)
+
+    /// No usable verification key could be resolved for the token
+    case verificationKeyUnavailable(String)
+
     /// JWT has expired
     case tokenExpired
     
@@ -68,6 +74,10 @@ public enum SSFError: Error, LocalizedError, Sendable {
             return "Invalid JWT: \(message)"
         case .signatureVerificationFailed:
             return "JWT signature verification failed"
+        case .unsupportedAlgorithm(let alg):
+            return "Unsupported or mismatched JWT signing algorithm: \(alg)"
+        case .verificationKeyUnavailable(let message):
+            return "Verification key unavailable: \(message)"
         case .tokenExpired:
             return "JWT token has expired"
         case .invalidIssuer(let expected, let actual):

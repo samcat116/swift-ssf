@@ -2,6 +2,7 @@ import XCTest
 @testable import SwiftSSF
 import Foundation
 import Crypto
+import _CryptoExtras
 
 final class JWTProcessorTests: XCTestCase {
     
@@ -88,7 +89,7 @@ final class JWTProcessorTests: XCTestCase {
             token.rawToken,
             expectedIssuer: issuer,
             expectedAudience: audience,
-            publicKey: publicKey
+            key: .es256(publicKey)
         )
         
         XCTAssertEqual(validatedToken.payload.iss, issuer)
@@ -118,7 +119,7 @@ final class JWTProcessorTests: XCTestCase {
                 token.rawToken,
                 expectedIssuer: issuer,
                 expectedAudience: audience,
-                publicKey: wrongPublicKey
+                key: .es256(wrongPublicKey)
             )
             XCTFail("Should have thrown signature verification error")
         } catch SSFError.signatureVerificationFailed {
@@ -149,7 +150,7 @@ final class JWTProcessorTests: XCTestCase {
                 token.rawToken,
                 expectedIssuer: wrongIssuer,
                 expectedAudience: audience,
-                publicKey: privateKey.publicKey
+                key: .es256(privateKey.publicKey)
             )
             XCTFail("Should have thrown invalid issuer error")
         } catch SSFError.invalidIssuer {
@@ -180,12 +181,186 @@ final class JWTProcessorTests: XCTestCase {
                 token.rawToken,
                 expectedIssuer: issuer,
                 expectedAudience: wrongAudience,
-                publicKey: privateKey.publicKey
+                key: .es256(privateKey.publicKey)
             )
             XCTFail("Should have thrown invalid audience error")
         } catch SSFError.invalidAudience {
             // Expected error
         }
+    }
+
+    // MARK: - SET type header validation
+
+    func testRejectsTokenWithoutSETType() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        // An otherwise-valid token whose typ is "JWT" must be rejected:
+        // it could be an access/ID token replayed into the event pipeline.
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"JWT"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        do {
+            _ = try await processor.parseSecurityEventToken(token, key: .es256(privateKey.publicKey))
+            XCTFail("Should have rejected typ JWT")
+        } catch SSFError.invalidJWT(let message) {
+            XCTAssertTrue(message.contains("typ"))
+        }
+    }
+
+    func testAcceptsApplicationPrefixedSETType() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"application/secevent+jwt"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(token, key: .es256(privateKey.publicKey))
+        XCTAssertEqual(parsed.payload.jti, "j1")
+    }
+
+    // MARK: - RS256
+
+    func testRS256Verification() async throws {
+        let processor = JWTProcessor()
+        let privateKey = try _RSA.Signing.PrivateKey(keySize: .bits2048)
+
+        let token = try Self.makeRS256Token(
+            payload: #"{"iss":"https://t.example.com","jti":"rs-1","iat":1700000000,"aud":["r1"],"events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            expectedAudience: ["r1"],
+            key: .rs256(privateKey.publicKey)
+        )
+        XCTAssertEqual(parsed.payload.jti, "rs-1")
+
+        // Wrong RSA key must fail
+        let otherKey = try _RSA.Signing.PrivateKey(keySize: .bits2048)
+        do {
+            _ = try await processor.parseSecurityEventToken(token, key: .rs256(otherKey.publicKey))
+            XCTFail("Should have failed with wrong RSA key")
+        } catch SSFError.signatureVerificationFailed {
+            // Expected
+        }
+    }
+
+    func testAlgorithmKeyMismatchRejected() async throws {
+        let processor = JWTProcessor()
+        let ecKey = P256.Signing.PrivateKey()
+
+        // ES256-signed token verified against an RSA key must be rejected,
+        // not silently accepted (algorithm confusion).
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"events":{}}"#,
+            privateKey: ecKey
+        )
+
+        let rsaKey = try _RSA.Signing.PrivateKey(keySize: .bits2048)
+        do {
+            _ = try await processor.parseSecurityEventToken(token, key: .rs256(rsaKey.publicKey))
+            XCTFail("Should have rejected alg/key mismatch")
+        } catch SSFError.unsupportedAlgorithm(let alg) {
+            XCTAssertEqual(alg, "ES256")
+        }
+    }
+
+    // MARK: - Audience forms
+
+    func testAudienceAsSingleString() async throws {
+        let processor = JWTProcessor()
+        let privateKey = P256.Signing.PrivateKey()
+
+        // RFC 7519 allows "aud" to be a bare string
+        let token = try Self.makeES256Token(
+            header: #"{"alg":"ES256","typ":"secevent+jwt"}"#,
+            payload: #"{"iss":"https://t.example.com","jti":"j1","iat":1700000000,"aud":"receiver-1","events":{}}"#,
+            privateKey: privateKey
+        )
+
+        let parsed = try await processor.parseSecurityEventToken(
+            token,
+            expectedAudience: ["receiver-1"],
+            key: .es256(privateKey.publicKey)
+        )
+        XCTAssertEqual(parsed.payload.aud, ["receiver-1"])
+    }
+
+    // MARK: - Test helpers
+
+    static func makeES256Token(header: String, payload: String, privateKey: P256.Signing.PrivateKey) throws -> String {
+        let signingInput = "\(Data(header.utf8).base64URLEncodedString()).\(Data(payload.utf8).base64URLEncodedString())"
+        let signature = try privateKey.signature(for: Data(signingInput.utf8))
+        return "\(signingInput).\(signature.rawRepresentation.base64URLEncodedString())"
+    }
+
+    static func makeRS256Token(payload: String, privateKey: _RSA.Signing.PrivateKey) throws -> String {
+        let header = #"{"alg":"RS256","typ":"secevent+jwt"}"#
+        let signingInput = "\(Data(header.utf8).base64URLEncodedString()).\(Data(payload.utf8).base64URLEncodedString())"
+        let signature = try privateKey.signature(
+            for: SHA256.hash(data: Data(signingInput.utf8)),
+            padding: .insecurePKCS1v1_5
+        )
+        return "\(signingInput).\(signature.rawRepresentation.base64URLEncodedString())"
+    }
+}
+
+// MARK: - JWK conversion tests
+
+final class JWKSClientTests: XCTestCase {
+
+    func testECJWKConversion() throws {
+        let privateKey = P256.Signing.PrivateKey()
+        let x963 = privateKey.publicKey.x963Representation
+        // x963 = 0x04 || x (32 bytes) || y (32 bytes)
+        let x = x963.subdata(in: 1..<33)
+        let y = x963.subdata(in: 33..<65)
+
+        let jwk = JWK(
+            kty: "EC",
+            use: "sig",
+            kid: "ec-key",
+            crv: "P-256",
+            x: x.base64URLEncodedString(),
+            y: y.base64URLEncodedString()
+        )
+
+        guard case .es256(let key) = try jwk.toVerificationKey() else {
+            return XCTFail("Expected ES256 key")
+        }
+        XCTAssertEqual(key.x963Representation, x963)
+    }
+
+    func testRSAJWKConversion() throws {
+        let privateKey = try _RSA.Signing.PrivateKey(keySize: .bits2048)
+        let publicKey = privateKey.publicKey
+
+        let primitives = try publicKey.getKeyPrimitives()
+        let jwk = JWK(
+            kty: "RSA",
+            use: "sig",
+            kid: "rsa-key",
+            n: Data(primitives.modulus).base64URLEncodedString(),
+            e: Data(primitives.publicExponent).base64URLEncodedString()
+        )
+
+        guard case .rs256 = try jwk.toVerificationKey() else {
+            return XCTFail("Expected RS256 key")
+        }
+    }
+
+    func testUnsupportedKeyTypeThrows() throws {
+        let jwk = JWK(kty: "OKP", kid: "ed-key", crv: "Ed25519")
+        XCTAssertThrowsError(try jwk.toVerificationKey())
     }
 }
 
