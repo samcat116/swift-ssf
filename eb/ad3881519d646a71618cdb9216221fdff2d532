@@ -1,0 +1,23 @@
+Tests/SwiftSSFTests/JWTProcessorTests.swift
+  s_4fc02f5e8166d7::t_1c6e6c2fbff440 54,76,105,136,167
+Tests/SwiftSSFTests/SecurityEventTokenTests.swift
+  s_4fc02f5e8166d7::t_1c6e6c2fbff440 9
+Sources/ExampleReceiver/main.swift
+  s_4fc02f5e8166d7::t_13685d9c39ce17 195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ebad3881519d646a71618cdb9216221fdff2d532",
+  "prompts": {},
+  "sessions": {
+    "s_4fc02f5e8166d7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1e4e4b7-a88a-4614-b6c2-ef51feead1eb",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
