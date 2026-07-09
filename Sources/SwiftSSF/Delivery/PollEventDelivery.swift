@@ -96,6 +96,10 @@ public enum BackoffStrategy: Sendable {
 public actor PollEventDelivery {
     private let receiver: SSFReceiver
     private let endpoint: URL
+    /// The stream this delivery polls, when known. Used to match `stream-updated`
+    /// events to this stream so a shared poll endpoint can't let another stream's
+    /// status stop this poller. `nil` falls back to endpoint-only matching.
+    private let streamID: String?
     private let configuration: PollDeliveryConfiguration
     private let eventHandler: SSFEventHandler
     private let logger = Logger(label: "SwiftSSF.PollEventDelivery")
@@ -123,16 +127,22 @@ public actor PollEventDelivery {
     /// happens before it observes the stop.
     private var generation = 0
 
-    /// - Parameter endpoint: the stream's poll delivery endpoint
-    ///   (`delivery.endpoint_url` from the stream configuration)
+    /// - Parameters:
+    ///   - endpoint: the stream's poll delivery endpoint
+    ///     (`delivery.endpoint_url` from the stream configuration)
+    ///   - streamID: the stream's id, when known. Supplying it makes status
+    ///     reactions require the `stream-updated` SET to name this stream, so a
+    ///     poller can't be stopped by another stream that shares the endpoint.
     public init(
         receiver: SSFReceiver,
         endpoint: URL,
+        streamID: String? = nil,
         configuration: PollDeliveryConfiguration = PollDeliveryConfiguration(),
         eventHandler: SSFEventHandler
     ) {
         self.receiver = receiver
         self.endpoint = endpoint
+        self.streamID = streamID
         self.configuration = configuration
         self.eventHandler = eventHandler
     }
@@ -235,10 +245,6 @@ public actor PollEventDelivery {
             : SSFHTTPClient.defaultTimeout
 
         while self.generation == generation && !Task.isCancelled {
-            // A status stop flagged on a previous iteration (e.g. one whose ack
-            // failed) takes effect here, before polling again.
-            if consumeStatusStop() { break }
-
             do {
                 let result = try await receiver.pollEvents(
                     endpoint: endpoint,
@@ -262,9 +268,9 @@ public actor PollEventDelivery {
                 if self.generation != generation { break }
 
                 // The observer flagged a paused/disabled status during this
-                // cycle. The ack has now completed, so publish the stopped state
-                // and exit — no further poll, and no restart raced against an
-                // unacked SET.
+                // cycle, and `pollEvents` returned — so the status SET was
+                // acknowledged. Only now publish the stopped state and exit: no
+                // further poll, and no restart raced against an unacked SET.
                 if consumeStatusStop() { break }
 
                 // Drain immediately while the transmitter has more events. When
@@ -300,6 +306,12 @@ public actor PollEventDelivery {
                     logger.debug("Long-poll request timed out with no events; re-polling")
                     continue
                 }
+
+                // This poll (or its ack) failed, so any status flagged during it
+                // may ride on an unacknowledged SET. Drop the flag rather than
+                // stop on it: a retry redelivers the status SET, re-flags it, and
+                // only stops once a poll acks it successfully.
+                pendingStopStatus = nil
 
                 consecutiveErrors += 1
                 let ssfError = error as? SSFError ?? SSFError.unknown(error)
@@ -348,6 +360,12 @@ public actor PollEventDelivery {
                 continue
             }
 
+            // If we know our stream id and the SET names a (different) stream,
+            // it's for another stream sharing this endpoint — ignore it.
+            if let streamID, let eventStreamID = event.streamID, eventStreamID != streamID {
+                continue
+            }
+
             switch updated.status {
             case .paused, .disabled:
                 let detail = updated.reason.map { " (\($0))" } ?? ""
@@ -372,15 +390,20 @@ public actor PollEventDelivery {
 
 /// Convenience extensions for common polling scenarios
 extension SSFReceiver {
-    /// Start a polling service for a stream's poll delivery endpoint
+    /// Start a polling service for a stream's poll delivery endpoint.
+    ///
+    /// Pass `streamID` when the endpoint may be shared across streams, so status
+    /// reactions only fire for `stream-updated` SETs naming this stream.
     public func startPolling(
         endpoint: URL,
+        streamID: String? = nil,
         configuration: PollDeliveryConfiguration = PollDeliveryConfiguration(),
         eventHandler: SSFEventHandler
     ) async -> PollEventDelivery {
         let pollService = PollEventDelivery(
             receiver: self,
             endpoint: endpoint,
+            streamID: streamID,
             configuration: configuration,
             eventHandler: eventHandler
         )
@@ -402,6 +425,7 @@ extension SSFReceiver {
 
         return await startPolling(
             endpoint: endpoint,
+            streamID: stream.stream_id,
             configuration: configuration,
             eventHandler: eventHandler
         )
@@ -431,6 +455,7 @@ public actor MultiStreamPollManager {
         let pollService = PollEventDelivery(
             receiver: receiver,
             endpoint: endpoint,
+            streamID: streamId,
             configuration: configuration,
             eventHandler: eventHandler
         )

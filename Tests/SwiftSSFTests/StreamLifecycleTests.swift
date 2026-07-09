@@ -485,7 +485,7 @@ final class StreamLifecycleTests: XCTestCase {
         XCTAssertNil(stoppedBy)
     }
 
-    func testStatusStopStillReportsAckFailure() async throws {
+    func testStatusStopDoesNotStopOnAckFailure() async throws {
         let transmitter = MockTransmitter()
         try await transmitter.start()
         defer { Task { try? await transmitter.stop() } }
@@ -508,12 +508,17 @@ final class StreamLifecycleTests: XCTestCase {
         )
         defer { Task { await poller.stop() } }
 
-        // A status-triggered stop must not swallow a genuine ack failure: the
-        // error should reach the handler even though the loop is stopping.
-        // (Waiting on `running` alone is racy — the observer clears it before
-        // the ack request is even attempted.)
+        // The ack failure must be reported to the handler, not swallowed...
         try await waitFor(timeout: 5) { handler.errors.isEmpty == false }
-        XCTAssertFalse(handler.errors.isEmpty, "Ack failure during a status stop should be reported")
+        XCTAssertFalse(handler.errors.isEmpty, "Ack failure should be reported")
+
+        // ...and the poller must NOT publish a stopped state on an unacked SET:
+        // a stop would let a restart redeliver the same SET and stop again.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let stoppedBy = await poller.stoppedByTransmitterStatus
+        let running = await poller.running
+        XCTAssertNil(stoppedBy, "Must not stop on a status SET whose ack failed")
+        XCTAssertTrue(running, "Poller should keep running (retrying) after an ack failure")
     }
 
     func testRestartAfterStatusStopResumesCleanly() async throws {
@@ -576,6 +581,39 @@ final class StreamLifecycleTests: XCTestCase {
         try await waitFor(timeout: 5) { await !poller.running }
         let stoppedBy = await poller.stoppedByTransmitterStatus
         XCTAssertEqual(stoppedBy, .disabled)
+    }
+
+    func testPollDeliveryIgnoresOtherStreamsStatus() async throws {
+        let transmitter = MockTransmitter()
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+        let issuer = transmitter.baseURL
+        let pollEndpoint = issuer.appendingPathComponent("poll")
+
+        // A disabled update naming a DIFFERENT stream on the same endpoint must
+        // not stop this poller.
+        transmitter.enqueue(try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.streamUpdated: ["status": AnyCodable("disabled")]
+        ], streamID: "stream-2"))
+
+        let handler = RecordingEventHandler()
+        let poller = await receiver.startPolling(
+            endpoint: pollEndpoint,
+            streamID: "stream-1",
+            configuration: PollDeliveryConfiguration(pollInterval: 0.1),
+            eventHandler: handler
+        )
+        defer { Task { await poller.stop() } }
+
+        // Wait for the SET to be delivered, then confirm we kept running.
+        try await waitFor(timeout: 5) { handler.events.isEmpty == false }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let running = await poller.running
+        let stoppedBy = await poller.stoppedByTransmitterStatus
+        XCTAssertTrue(running, "A status for another stream must not stop this poller")
+        XCTAssertNil(stoppedBy)
     }
 
     func testPollDeliveryIgnoresStatusWhenReactionDisabled() async throws {
