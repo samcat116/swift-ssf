@@ -1,0 +1,49 @@
+Sources/SwiftSSF/Models/SSFError.swift
+  s_5a81a3b69062ac::t_90ab66539de2f6 67-70
+  s_5a81a3b69062ac::t_bb7598b6880c48 118-119
+Sources/ExampleReceiver/main.swift
+  s_5a81a3b69062ac::t_02e3001b2721a7 101-113
+Sources/SwiftSSF/SSFReceiver.swift
+  s_5a81a3b69062ac::t_298d2e11ab749a 129,135-140
+  s_5a81a3b69062ac::t_c32526937265b7 331,335
+  s_5a81a3b69062ac::t_20bf9ccf45ad71 141,245-330,332-334,336-345
+  s_5a81a3b69062ac::t_f1e66fc2ebda95 373
+  s_5a81a3b69062ac::t_4c7d8953370760 436
+  s_5a81a3b69062ac::t_24436587ba661a 83-87
+  s_5a81a3b69062ac::t_6f4cb1da6275de 142
+Sources/SwiftSSF/Delivery/PollEventDelivery.swift
+  s_5a81a3b69062ac::t_b889c6899ea5c3 254-256,269-272,274
+  s_5a81a3b69062ac::t_aad079a1cd9197 93
+  s_5a81a3b69062ac::t_d05fb82d52023b 129,131,133,159-160
+  s_5a81a3b69062ac::t_d58e8956d01e57 215-221
+  s_5a81a3b69062ac::t_59a54b5e8a1e62 175,253,259-268,273,275-277
+  s_5a81a3b69062ac::t_e7928fa196ac36 257-258
+  s_5a81a3b69062ac::t_831febd27eb7f0 96-98
+  s_5a81a3b69062ac::t_88cfdb4f325c5f 122,149-151,153-155,168-174
+  s_5a81a3b69062ac::t_9119ccf00621b6 127-128,130,132,134-135
+  s_5a81a3b69062ac::t_0c63b81eac8456 27-32,39-40,48
+  s_5a81a3b69062ac::t_9cf4a0d50fa9fe 99
+  s_5a81a3b69062ac::t_e7c550c2cb2629 176
+Tests/SwiftSSFTests/StreamLifecycleTests.swift
+  s_5a81a3b69062ac::t_5cf8e8c041b8b0 203,223,241
+  s_5a81a3b69062ac::t_266174569f6c77 1-202,204-222,224-240,242-311,313-332,335-336,340-341,343-351,353-361,375,386,393-406
+  s_5a81a3b69062ac::t_0a69915b676439 312,333-334,337-339,342,352,362-374,376-385,387-392
+Sources/SwiftSSF/Models/SecurityEvent.swift
+  s_5a81a3b69062ac::t_d90032998fb27a 103-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6993998da6ad43b68631feb6dba5333e97f5aeb9",
+  "prompts": {},
+  "sessions": {
+    "s_5a81a3b69062ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b58d5d3-21ca-4e53-a37e-800a903858c9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
