@@ -1,0 +1,28 @@
+Sources/SwiftSSF/Client/SSFTokenProvider.swift
+  s_9ba4895c256e36::t_b0fc917f83dbab 1-52
+README.md
+  s_9ba4895c256e36::t_b0fc917f83dbab 66-93
+Sources/SwiftSSF/SSFReceiver.swift
+  s_9ba4895c256e36::t_b0fc917f83dbab 12-15,18-25,48,57,95-99,118-121,124,370,375-390
+  s_9ba4895c256e36::t_f23214a4a3cbff 391-392
+Sources/SwiftSSF/Client/SSFHTTPClient.swift
+  s_9ba4895c256e36::t_b0fc917f83dbab 16,27,29,41-49,70,86,99,236-239
+Tests/SwiftSSFTests/SwiftSSFTests.swift
+  s_9ba4895c256e36::t_b0fc917f83dbab 36-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "410912dee3988602de6dae22ed365c49872a192f",
+  "prompts": {},
+  "sessions": {
+    "s_9ba4895c256e36": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd776a02-3b16-43c9-a517-d8e98c0d25d7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
