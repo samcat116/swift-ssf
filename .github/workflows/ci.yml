@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS (Swift ${{ matrix.swift }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        swift: ["5.9"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Swift version
+        run: swift --version
+      - name: Build (with tests)
+        run: swift build --build-tests
+      - name: Test
+        run: swift test
+
+  linux:
+    name: Linux (Swift ${{ matrix.swift }})
+    runs-on: ubuntu-latest
+    container: swift:${{ matrix.swift }}
+    strategy:
+      fail-fast: false
+      matrix:
+        swift: ["5.9", "6.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build (with tests)
+        run: swift build --build-tests
+      - name: Test
+        run: swift test
+
+  swift6-mode:
+    name: Swift 6 language mode (non-blocking)
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build in Swift 6 language mode
+        run: swift build --build-tests -Xswiftc -swift-version -Xswiftc 6
