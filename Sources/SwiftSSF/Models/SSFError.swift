@@ -64,7 +64,15 @@ public enum SSFError: Error, LocalizedError, Sendable {
     
     /// Connection timeout
     case connectionTimeout
-    
+
+    /// Timed out awaiting the verification event correlated with a request
+    case verificationTimeout(String)
+
+    /// The follow-up ack-only poll request failed after events were handled.
+    /// Distinct from a poll timeout so long-poll callers don't mistake a failed
+    /// acknowledgement for a benign empty long-poll.
+    case acknowledgementFailed(Error)
+
     /// Unknown error
     case unknown(Error)
     
@@ -112,6 +120,10 @@ public enum SSFError: Error, LocalizedError, Sendable {
             return "Configuration error: \(message)"
         case .connectionTimeout:
             return "Connection timeout"
+        case .verificationTimeout(let message):
+            return "Verification timed out: \(message)"
+        case .acknowledgementFailed(let error):
+            return "Failed to acknowledge events: \(error.localizedDescription)"
         case .unknown(let error):
             return "Unknown error: \(error.localizedDescription)"
         }

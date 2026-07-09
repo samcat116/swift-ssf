@@ -100,6 +100,49 @@ public struct StreamUpdatedEvent: Codable, Sendable {
     }
 }
 
+/// A framework-level signal an `SSFReceiver` surfaces while processing SETs,
+/// so applications can react to stream lifecycle changes without re-parsing
+/// SETs themselves. Observe these via `SSFReceiver.lifecycleEvents()`.
+public struct StreamLifecycleEvent: Sendable {
+    /// What the transmitter signalled.
+    public enum Payload: Sendable {
+        /// The transmitter changed the stream's status (`stream-updated`).
+        case statusChanged(StreamUpdatedEvent)
+
+        /// A verification result arrived (`verification`), echoing the `state`
+        /// from the corresponding verification request for correlation.
+        case verified(VerificationEvent)
+    }
+
+    /// The framework event carried by the SET.
+    public let payload: Payload
+
+    /// The `stream_id` the carrying SET identifies, taken from its opaque
+    /// `sub_id` (SSF identifies the stream a management event belongs to with an
+    /// opaque subject whose `id` is the `stream_id`). `nil` when the SET carries
+    /// no such subject. Used to correlate an event to a specific stream.
+    public let streamID: String?
+
+    /// The poll delivery endpoint the carrying SET arrived on, or `nil` when the
+    /// SET was received by push or processed directly with no poll context.
+    /// Poll-based reactors use this to match events to their own stream.
+    public let pollEndpoint: URL?
+
+    public init(payload: Payload, streamID: String? = nil, pollEndpoint: URL? = nil) {
+        self.payload = payload
+        self.streamID = streamID
+        self.pollEndpoint = pollEndpoint
+    }
+}
+
+extension SubjectIdentifier {
+    /// The `stream_id` an SSF management SET names via its opaque `sub_id`
+    /// (`{"format":"opaque","id":"<stream_id>"}`), or `nil` for other subjects.
+    public var streamIdentifier: String? {
+        format == "opaque" ? string("id") : nil
+    }
+}
+
 // MARK: - CAEP Event Types (CAEP 1.0)
 
 /// Session of the subject was revoked. All fields are the CAEP common
