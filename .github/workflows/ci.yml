@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build (with tests)
+        run: swift build --build-tests
+      - name: Test
+        run: swift test
+
+  linux:
+    name: Linux (Swift ${{ matrix.swift }})
+    runs-on: ubuntu-latest
+    container: swift:${{ matrix.swift }}
+    strategy:
+      fail-fast: false
+      matrix:
+        swift: ["6.1", "6.2", "6.3"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build (with tests)
+        run: swift build --build-tests
+      - name: Test
+        run: swift test
+
+  strict-concurrency:
+    name: Strict concurrency (non-blocking)
+    runs-on: ubuntu-latest
+    container: swift:6.3
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      # Surfaces remaining data-race warnings to track Swift 6 readiness.
+      # We can't force -swift-version 6 across the whole graph: several
+      # dependencies enable StrictConcurrency as an "upcoming feature" in
+      # their manifests, which errors ("already enabled") under language
+      # mode 6. -strict-concurrency=complete gives the same signal for our
+      # own code without that clash.
+      - name: Build with complete strict-concurrency checking
+        run: swift build --build-tests -Xswiftc -strict-concurrency=complete
