@@ -1,5 +1,6 @@
 import Foundation
 import AsyncHTTPClient
+import NIOCore
 import Crypto
 import Logging
 
@@ -28,6 +29,9 @@ public struct SSFReceiverConfiguration: Sendable {
     /// Expected audience identifiers
     public let expectedAudience: [String]?
 
+    /// How the SET's `aud` claim is matched against `expectedAudience`.
+    public let audienceValidation: AudienceValidation
+
     /// Accept SETs without verifying their signature.
     ///
     /// This defaults to `false` and should stay `false` outside of tests:
@@ -47,6 +51,7 @@ public struct SSFReceiverConfiguration: Sendable {
         tokenProvider: SSFTokenProvider? = nil,
         expectedIssuer: URL? = nil,
         expectedAudience: [String]? = nil,
+        audienceValidation: AudienceValidation = .anyOverlap,
         allowUnverifiedTokens: Bool = false,
         httpClient: HTTPClient? = nil,
         logLevel: Logger.Level = .info
@@ -56,6 +61,7 @@ public struct SSFReceiverConfiguration: Sendable {
         self.tokenProvider = tokenProvider
         self.expectedIssuer = expectedIssuer ?? transmitterURL
         self.expectedAudience = expectedAudience
+        self.audienceValidation = audienceValidation
         self.allowUnverifiedTokens = allowUnverifiedTokens
         self.httpClient = httpClient
         self.logLevel = logLevel
@@ -372,11 +378,16 @@ public actor SSFReceiver {
     /// Successfully handled SETs are acknowledged (and failures reported via
     /// setErrs) with a follow-up ack-only request, so a crash between receipt
     /// and handling means redelivery rather than loss.
+    ///
+    /// - Parameter timeout: HTTP request timeout for the polling request. For
+    ///   long polling (`returnImmediately: false`) pass a value that exceeds
+    ///   the transmitter's hold time; the default suits immediate polls.
     @discardableResult
     public func pollEvents(
         endpoint: URL,
         maxEvents: Int = 100,
         returnImmediately: Bool = true,
+        timeout: TimeAmount = SSFHTTPClient.defaultTimeout,
         handler: SSFEventHandler
     ) async throws -> PollResult {
         logger.debug("Polling events from \(endpoint)")
@@ -384,7 +395,7 @@ public actor SSFReceiver {
         let response = try await httpClient.pollEvents(endpoint: endpoint, PollRequest(
             maxEvents: maxEvents,
             returnImmediately: returnImmediately
-        ))
+        ), timeout: timeout)
 
         var acks: [String] = []
         var errs: [String: SETErrorStatus] = [:]
@@ -427,6 +438,7 @@ public actor SSFReceiver {
         stream: StreamConfiguration,
         maxEvents: Int = 100,
         returnImmediately: Bool = true,
+        timeout: TimeAmount = SSFHTTPClient.defaultTimeout,
         handler: SSFEventHandler
     ) async throws -> PollResult {
         guard let delivery = stream.delivery, delivery.method == .poll,
@@ -438,6 +450,7 @@ public actor SSFReceiver {
             endpoint: endpoint,
             maxEvents: maxEvents,
             returnImmediately: returnImmediately,
+            timeout: timeout,
             handler: handler
         )
     }
@@ -526,6 +539,7 @@ public actor SSFReceiver {
             token,
             expectedIssuer: configuration.expectedIssuer,
             expectedAudience: configuration.expectedAudience,
+            audienceValidation: configuration.audienceValidation,
             key: key
         )
     }

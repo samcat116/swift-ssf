@@ -1,10 +1,13 @@
 import Foundation
+import NIOCore
 import Logging
 
 /// Configuration for poll-based event delivery (RFC 8936)
 public struct PollDeliveryConfiguration: Sendable {
-    /// Polling interval in seconds (skipped while the transmitter reports
-    /// more events available)
+    /// Polling interval in seconds between immediate polls. Skipped while the
+    /// transmitter reports more events available, and skipped entirely while
+    /// long polling (`returnImmediately == false`), where the transmitter
+    /// itself paces delivery by holding the connection open.
     public let pollInterval: TimeInterval
 
     /// Maximum number of events to fetch per poll
@@ -12,8 +15,15 @@ public struct PollDeliveryConfiguration: Sendable {
 
     /// Whether the transmitter should respond immediately even when no
     /// events are available. `false` enables long polling (the RFC 8936
-    /// default); make sure the HTTP client timeout accommodates it.
+    /// default); the poll loop then uses `longPollTimeout` for the HTTP
+    /// request and treats a timeout as an empty poll rather than an error.
     public let returnImmediately: Bool
+
+    /// HTTP request timeout, in seconds, used for long-poll requests
+    /// (`returnImmediately == false`). It should comfortably exceed the
+    /// transmitter's hold time so the client doesn't abort a connection the
+    /// transmitter is legitimately holding open. Ignored for immediate polls.
+    public let longPollTimeout: TimeInterval
 
     /// Maximum number of poll errors before stopping
     public let maxConsecutiveErrors: Int
@@ -34,6 +44,7 @@ public struct PollDeliveryConfiguration: Sendable {
         pollInterval: TimeInterval = 30.0,
         maxEventsPerPoll: Int = 100,
         returnImmediately: Bool = true,
+        longPollTimeout: TimeInterval = 300.0,
         maxConsecutiveErrors: Int = 5,
         errorBackoffStrategy: BackoffStrategy = .exponential(base: 2.0, maxDelay: 300.0, multiplier: 1.0),
         continueOnError: Bool = true,
@@ -42,6 +53,7 @@ public struct PollDeliveryConfiguration: Sendable {
         self.pollInterval = pollInterval
         self.maxEventsPerPoll = maxEventsPerPoll
         self.returnImmediately = returnImmediately
+        self.longPollTimeout = longPollTimeout
         self.maxConsecutiveErrors = maxConsecutiveErrors
         self.errorBackoffStrategy = errorBackoffStrategy
         self.continueOnError = continueOnError
@@ -193,12 +205,18 @@ public actor PollEventDelivery {
     // MARK: - Private Methods
 
     private func runPollingLoop(generation: Int) async {
+        let isLongPolling = !configuration.returnImmediately
+        let requestTimeout: TimeAmount = isLongPolling
+            ? .milliseconds(Int64(configuration.longPollTimeout * 1000))
+            : SSFHTTPClient.defaultTimeout
+
         while self.generation == generation && !Task.isCancelled {
             do {
                 let result = try await receiver.pollEvents(
                     endpoint: endpoint,
                     maxEvents: configuration.maxEventsPerPoll,
                     returnImmediately: configuration.returnImmediately,
+                    timeout: requestTimeout,
                     handler: eventHandler
                 )
 
@@ -217,8 +235,10 @@ public actor PollEventDelivery {
                 // now the ack is done, without polling again.
                 if self.generation != generation { break }
 
-                // Drain immediately while the transmitter has more events
-                if result.moreAvailable {
+                // Drain immediately while the transmitter has more events. When
+                // long polling, the transmitter paces us by holding the
+                // connection open, so poll again immediately without sleeping.
+                if result.moreAvailable || isLongPolling {
                     continue
                 }
 
@@ -230,11 +250,23 @@ public actor PollEventDelivery {
             } catch {
                 // A manual stop() cancels the in-flight poll; the HTTP client
                 // surfaces that as a wrapped error. Treat only genuine
-                // cancellation as a clean exit. A status-triggered stop clears
-                // isRunning without cancelling, so a real ack failure there must
-                // still be reported, not swallowed.
+                // cancellation as a clean exit. A status-triggered stop advances
+                // the generation without cancelling, so a real ack failure there
+                // must still be reported, not swallowed.
                 if Task.isCancelled {
                     break
+                }
+
+                // A long-poll request that times out means the transmitter held
+                // the connection open and no events arrived. That is a normal
+                // empty poll, not an error, so don't count it toward backoff.
+                if isLongPolling, let ssfError = error as? SSFError, case .connectionTimeout = ssfError {
+                    if consecutiveErrors > 0 {
+                        logger.info("Long polling recovered after \(consecutiveErrors) consecutive errors")
+                        consecutiveErrors = 0
+                    }
+                    logger.debug("Long-poll request timed out with no events; re-polling")
+                    continue
                 }
 
                 consecutiveErrors += 1
