@@ -217,10 +217,12 @@ public actor PollEventDelivery {
             } catch is CancellationError {
                 break
             } catch {
-                // A stop()/status teardown cancels the in-flight poll; the HTTP
-                // client surfaces that as a wrapped error. Treat it as a clean
-                // exit rather than a spurious poll failure.
-                if Task.isCancelled || !isRunning {
+                // A manual stop() cancels the in-flight poll; the HTTP client
+                // surfaces that as a wrapped error. Treat only genuine
+                // cancellation as a clean exit. A status-triggered stop clears
+                // isRunning without cancelling, so a real ack failure there must
+                // still be reported, not swallowed.
+                if Task.isCancelled {
                     break
                 }
 

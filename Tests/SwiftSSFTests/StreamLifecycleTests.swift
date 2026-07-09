@@ -23,6 +23,8 @@ final class MockTransmitter: @unchecked Sendable {
         /// Bodies of ack-only poll requests (maxEvents: 0), for asserting that
         /// delivered SETs were acknowledged.
         private var _ackBodies: [String] = []
+        /// When true, ack-only requests fail with 500.
+        private var _failAcks = false
 
         func enqueue(_ set: String) {
             lock.lock(); defer { lock.unlock() }
@@ -37,6 +39,16 @@ final class MockTransmitter: @unchecked Sendable {
         var ackBodies: [String] {
             lock.lock(); defer { lock.unlock() }
             return _ackBodies
+        }
+
+        func setFailAcks(_ value: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            _failAcks = value
+        }
+
+        var failAcks: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return _failAcks
         }
 
         func setOnVerify(_ set: String?) {
@@ -79,6 +91,7 @@ final class MockTransmitter: @unchecked Sendable {
     func deliverOnVerify(_ set: String?) { state.setOnVerify(set) }
     var verifyCount: Int { state.verifyCount }
     var ackBodies: [String] { state.ackBodies }
+    func failAcks(_ value: Bool = true) { state.setFailAcks(value) }
 
     func start() async throws {
         let state = self.state
@@ -150,7 +163,12 @@ final class MockTransmitter: @unchecked Sendable {
                 let bodyString = body.map { String(buffer: $0) } ?? ""
                 if bodyString.contains("\"maxEvents\":0") {
                     state.recordAck(bodyString)
-                    writeJSON(context: context, status: .ok, body: "{\"sets\":{}}")
+                    if state.failAcks {
+                        writeJSON(context: context, status: .internalServerError,
+                                  body: "{\"error\":\"server_error\"}")
+                    } else {
+                        writeJSON(context: context, status: .ok, body: "{\"sets\":{}}")
+                    }
                     return
                 }
                 let sets = state.drain()
@@ -358,6 +376,37 @@ final class StreamLifecycleTests: XCTestCase {
         let acks = transmitter.ackBodies
         XCTAssertTrue(acks.contains { $0.contains("jti-0") },
                       "Expected the stream-updated SET (jti-0) to be acked; acks=\(acks)")
+    }
+
+    func testStatusStopStillReportsAckFailure() async throws {
+        let transmitter = MockTransmitter()
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+        let issuer = transmitter.baseURL
+        let pollEndpoint = issuer.appendingPathComponent("poll")
+
+        // The paused SET is delivered, but the follow-up ack request fails.
+        transmitter.failAcks()
+        transmitter.enqueue(try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.streamUpdated: ["status": AnyCodable("paused")]
+        ]))
+
+        let handler = RecordingEventHandler()
+        let poller = await receiver.startPolling(
+            endpoint: pollEndpoint,
+            configuration: PollDeliveryConfiguration(pollInterval: 0.1),
+            eventHandler: handler
+        )
+        defer { Task { await poller.stop() } }
+
+        // A status-triggered stop must not swallow a genuine ack failure: the
+        // error should reach the handler even though the loop is stopping.
+        // (Waiting on `running` alone is racy — the observer clears it before
+        // the ack request is even attempted.)
+        try await waitFor(timeout: 5) { handler.errors.isEmpty == false }
+        XCTAssertFalse(handler.errors.isEmpty, "Ack failure during a status stop should be reported")
     }
 
     func testPollDeliveryStopsOnStreamDisabled() async throws {
