@@ -1,0 +1,25 @@
+Sources/SwiftSSF/Delivery/PollEventDelivery.swift
+  s_5a81a3b69062ac::t_10ea1634098d84 215-218
+  s_5a81a3b69062ac::t_86eb00e719d555 131-132,141,146,162-164,167
+  s_5a81a3b69062ac::t_313f223540b2ff 195-196
+  s_5a81a3b69062ac::t_ad18cc34cbc309 100-106
+  s_5a81a3b69062ac::t_3f5a27ab6ed411 275,277-279,295-297,299
+Tests/SwiftSSFTests/StreamLifecycleTests.swift
+  s_5a81a3b69062ac::t_349d4acc5e9057 412-448
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c573fda1ac8efe721224d7daf71c3a15cf1e9535",
+  "prompts": {},
+  "sessions": {
+    "s_5a81a3b69062ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b58d5d3-21ca-4e53-a37e-800a903858c9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
