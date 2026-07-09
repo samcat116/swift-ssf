@@ -20,10 +20,23 @@ final class MockTransmitter: @unchecked Sendable {
         /// SET to enqueue for delivery whenever a verification request arrives.
         private var _onVerify: String?
         private var _verifyCount = 0
+        /// Bodies of ack-only poll requests (maxEvents: 0), for asserting that
+        /// delivered SETs were acknowledged.
+        private var _ackBodies: [String] = []
 
         func enqueue(_ set: String) {
             lock.lock(); defer { lock.unlock() }
             _queued.append(set)
+        }
+
+        func recordAck(_ body: String) {
+            lock.lock(); defer { lock.unlock() }
+            _ackBodies.append(body)
+        }
+
+        var ackBodies: [String] {
+            lock.lock(); defer { lock.unlock() }
+            return _ackBodies
         }
 
         func setOnVerify(_ set: String?) {
@@ -65,6 +78,7 @@ final class MockTransmitter: @unchecked Sendable {
     func enqueue(_ set: String) { state.enqueue(set) }
     func deliverOnVerify(_ set: String?) { state.setOnVerify(set) }
     var verifyCount: Int { state.verifyCount }
+    var ackBodies: [String] { state.ackBodies }
 
     func start() async throws {
         let state = self.state
@@ -135,6 +149,7 @@ final class MockTransmitter: @unchecked Sendable {
                 // Ack-only requests (maxEvents: 0) return nothing further.
                 let bodyString = body.map { String(buffer: $0) } ?? ""
                 if bodyString.contains("\"maxEvents\":0") {
+                    state.recordAck(bodyString)
                     writeJSON(context: context, status: .ok, body: "{\"sets\":{}}")
                     return
                 }
@@ -337,6 +352,12 @@ final class StreamLifecycleTests: XCTestCase {
         let stoppedBy = await poller.stoppedByTransmitterStatus
         XCTAssertFalse(running, "Poller should stop after a paused status")
         XCTAssertEqual(stoppedBy, .paused)
+
+        // The status SET must have been acknowledged before the poller stopped,
+        // otherwise the transmitter would redeliver it and re-trigger the stop.
+        let acks = transmitter.ackBodies
+        XCTAssertTrue(acks.contains { $0.contains("jti-0") },
+                      "Expected the stream-updated SET (jti-0) to be acked; acks=\(acks)")
     }
 
     func testPollDeliveryStopsOnStreamDisabled() async throws {

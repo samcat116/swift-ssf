@@ -201,6 +201,11 @@ public actor PollEventDelivery {
                     logger.debug("Poll cycle processed \(result.processed) events, \(result.failed) failures")
                 }
 
+                // The status observer may have requested a graceful stop while
+                // this poll was handling/acking its SETs. Exit now the ack is
+                // done, without polling again.
+                if !isRunning { break }
+
                 // Drain immediately while the transmitter has more events
                 if result.moreAvailable {
                     continue
@@ -269,7 +274,13 @@ public actor PollEventDelivery {
                 let detail = updated.reason.map { " (\($0))" } ?? ""
                 logger.info("Transmitter reported stream \(updated.status.rawValue)\(detail); stopping polling for \(endpoint)")
                 stoppedStatus = updated.status
-                teardown()
+                // Request a graceful stop rather than cancelling the in-flight
+                // poll: the SET carrying this status is broadcast before it is
+                // handled and acked, so cancelling now would abort its ack and
+                // let the transmitter redeliver it. Clearing isRunning makes the
+                // poll loop exit after its current cycle completes.
+                isRunning = false
+                return
             case .enabled:
                 continue  // already polling; nothing to do
             }
