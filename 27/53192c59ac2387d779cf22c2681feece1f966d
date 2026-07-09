@@ -1,0 +1,31 @@
+Sources/SwiftSSF/Delivery/PollEventDelivery.swift
+  s_5a81a3b69062ac::t_e6711ff2b2fd2c 270-280,283,285
+Sources/SwiftSSF/Models/SSFError.swift
+  s_5a81a3b69062ac::t_01fe06da1b4321 125-126
+  s_5a81a3b69062ac::t_7d80e47b0ca0e2 71-75
+Sources/SwiftSSF/SSFReceiver.swift
+  s_5a81a3b69062ac::t_45c0271e8baec8 442-454
+Tests/SwiftSSFTests/StreamLifecycleTests.swift
+  s_5a81a3b69062ac::t_339694b16e6a27 39-43
+  s_5a81a3b69062ac::t_65341fd7a1e11f 91-93,95-97,100
+  s_5a81a3b69062ac::t_7984cd21604636 20-22
+  s_5a81a3b69062ac::t_6a677d875bac63 115
+  s_5a81a3b69062ac::t_f132f62dfa5d01 503-539
+  s_5a81a3b69062ac::t_21bd73f0543d8d 201,203,206-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2753192c59ac2387d779cf22c2681feece1f966d",
+  "prompts": {},
+  "sessions": {
+    "s_5a81a3b69062ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b58d5d3-21ca-4e53-a37e-800a903858c9",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
