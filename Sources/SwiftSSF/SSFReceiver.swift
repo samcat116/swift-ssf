@@ -17,6 +17,9 @@ public struct SSFReceiverConfiguration: Sendable {
     /// Expected audience identifiers
     public let expectedAudience: [String]?
 
+    /// How the SET's `aud` claim is matched against `expectedAudience`.
+    public let audienceValidation: AudienceValidation
+
     /// Accept SETs without verifying their signature.
     ///
     /// This defaults to `false` and should stay `false` outside of tests:
@@ -35,6 +38,7 @@ public struct SSFReceiverConfiguration: Sendable {
         authToken: String? = nil,
         expectedIssuer: URL? = nil,
         expectedAudience: [String]? = nil,
+        audienceValidation: AudienceValidation = .anyOverlap,
         allowUnverifiedTokens: Bool = false,
         httpClient: HTTPClient? = nil,
         logLevel: Logger.Level = .info
@@ -43,6 +47,7 @@ public struct SSFReceiverConfiguration: Sendable {
         self.authToken = authToken
         self.expectedIssuer = expectedIssuer ?? transmitterURL
         self.expectedAudience = expectedAudience
+        self.audienceValidation = audienceValidation
         self.allowUnverifiedTokens = allowUnverifiedTokens
         self.httpClient = httpClient
         self.logLevel = logLevel
@@ -368,6 +373,7 @@ public actor SSFReceiver {
             token,
             expectedIssuer: configuration.expectedIssuer,
             expectedAudience: configuration.expectedAudience,
+            audienceValidation: configuration.audienceValidation,
             key: key
         )
     }
