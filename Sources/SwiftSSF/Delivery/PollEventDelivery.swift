@@ -195,12 +195,15 @@ public actor PollEventDelivery {
     /// state now — after the current poll's ack — and report that the loop
     /// should exit. Runs synchronously with the loop's `break`, so `running`
     /// and `stoppedByTransmitterStatus` only change once the loop has left and
-    /// the status SET is acknowledged.
+    /// the status SET is acknowledged. Also tears down the observer, since it no
+    /// longer returns on its own.
     private func consumeStatusStop() -> Bool {
         guard let status = pendingStopStatus else { return false }
         stoppedStatus = status
         pendingStopStatus = nil
         isRunning = false
+        statusObserverTask?.cancel()
+        statusObserverTask = nil
         return true
     }
 
@@ -354,11 +357,14 @@ public actor PollEventDelivery {
                 // cycle, so `running`/`stoppedByTransmitterStatus` don't flip —
                 // and a restart isn't invited — until the status SET has been
                 // acknowledged. Don't cancel the in-flight poll: that would
-                // abort the ack and let the transmitter redeliver it.
+                // abort the ack and let the transmitter redeliver it. Keep
+                // observing: a later `enabled` in the same batch (SETs arrive
+                // unordered) must be able to clear this before the loop acts.
                 pendingStopStatus = updated.status
-                return
             case .enabled:
-                continue  // already polling; nothing to do
+                // Clears a pending stop flagged earlier in this batch, so a
+                // paused→enabled flap delivered together doesn't stop the loop.
+                pendingStopStatus = nil
             }
         }
     }

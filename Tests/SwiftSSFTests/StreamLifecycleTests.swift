@@ -453,6 +453,38 @@ final class StreamLifecycleTests: XCTestCase {
                       "Expected the stream-updated SET (jti-0) to be acked; acks=\(acks)")
     }
 
+    func testPollDeliveryKeepsRunningOnEnabledStatus() async throws {
+        let transmitter = MockTransmitter()
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+        let issuer = transmitter.baseURL
+        let pollEndpoint = issuer.appendingPathComponent("poll")
+
+        // An `enabled` stream-updated event must not stop the poller.
+        transmitter.enqueue(try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.streamUpdated: ["status": AnyCodable("enabled")]
+        ], streamID: "stream-1"))
+
+        let handler = RecordingEventHandler()
+        let poller = await receiver.startPolling(
+            endpoint: pollEndpoint,
+            configuration: PollDeliveryConfiguration(pollInterval: 0.1),
+            eventHandler: handler
+        )
+        defer { Task { await poller.stop() } }
+
+        // Let it deliver and poll a few more times.
+        try await waitFor(timeout: 5) { handler.events.isEmpty == false }
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let running = await poller.running
+        let stoppedBy = await poller.stoppedByTransmitterStatus
+        XCTAssertTrue(running, "An enabled status must not stop the poller")
+        XCTAssertNil(stoppedBy)
+    }
+
     func testStatusStopStillReportsAckFailure() async throws {
         let transmitter = MockTransmitter()
         try await transmitter.start()
