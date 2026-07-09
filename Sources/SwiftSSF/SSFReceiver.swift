@@ -282,6 +282,11 @@ public actor SSFReceiver {
     /// server, or `processSecurityEventToken`) must be active to receive it —
     /// this call only correlates the result, it does not poll on its own.
     ///
+    /// An event is accepted only when both the echoed `state` and the SET's
+    /// stream id (its opaque `sub_id`) match, so a reused `state` across streams
+    /// can't resolve to another stream's event. Transmitters that omit the
+    /// stream `sub_id` on verification events won't satisfy this call.
+    ///
     /// - Throws: `SSFError.verificationTimeout` if no matching event arrives
     ///   within `timeout` seconds.
     @discardableResult
@@ -302,8 +307,12 @@ public actor SSFReceiver {
         return try await withThrowingTaskGroup(of: VerificationEvent?.self) { group in
             group.addTask {
                 for await event in events {
+                    // Require both the echoed state and the SET's stream id to
+                    // match, so a reused state can't accept another stream's
+                    // verification event (or a malformed one with no stream id).
                     if case .verified(let verification) = event.payload,
-                       verification.state == correlationState {
+                       verification.state == correlationState,
+                       event.streamID == id {
                         return verification
                     }
                 }
@@ -368,12 +377,14 @@ public actor SSFReceiver {
     private func broadcastLifecycleEvents(from token: SecurityEventToken, pollEndpoint: URL?) {
         guard !lifecycleContinuations.isEmpty else { return }
 
+        let streamID = token.payload.sub_id?.streamIdentifier
+
         if let updated = try? token.payload.event(SSFEventTypes.streamUpdated, as: StreamUpdatedEvent.self) {
-            emitLifecycleEvent(StreamLifecycleEvent(payload: .statusChanged(updated), pollEndpoint: pollEndpoint))
+            emitLifecycleEvent(StreamLifecycleEvent(payload: .statusChanged(updated), streamID: streamID, pollEndpoint: pollEndpoint))
         }
 
         if let verification = try? token.payload.event(SSFEventTypes.verification, as: VerificationEvent.self) {
-            emitLifecycleEvent(StreamLifecycleEvent(payload: .verified(verification), pollEndpoint: pollEndpoint))
+            emitLifecycleEvent(StreamLifecycleEvent(payload: .verified(verification), streamID: streamID, pollEndpoint: pollEndpoint))
         }
     }
 

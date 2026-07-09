@@ -222,13 +222,19 @@ final class MockTransmitter: @unchecked Sendable {
 final class StreamLifecycleTests: XCTestCase {
     private let signingKey = P256.Signing.PrivateKey()
 
-    /// Build a signed SET carrying a single framework event.
-    private func makeSET(issuer: URL, events: [String: [String: AnyCodable]]) async throws -> String {
+    /// Build a signed SET carrying a single framework event, optionally naming
+    /// the stream it applies to via an opaque `sub_id`.
+    private func makeSET(
+        issuer: URL,
+        events: [String: [String: AnyCodable]],
+        streamID: String? = nil
+    ) async throws -> String {
         let processor = JWTProcessor()
         let token = try await processor.createSecurityEventToken(
             issuer: issuer,
             audience: ["receiver"],
             events: events,
+            subject: streamID.map { SubjectIdentifier.opaque(id: $0) },
             privateKey: signingKey
         )
         return token.rawToken
@@ -315,12 +321,12 @@ final class StreamLifecycleTests: XCTestCase {
         let issuer = transmitter.baseURL
         let pollEndpoint = issuer.appendingPathComponent("poll")
 
-        // The transmitter delivers a verification event echoing our state once
-        // a verification request arrives.
+        // The transmitter delivers a verification event echoing our state and
+        // naming our stream once a verification request arrives.
         let state = "correlation-42"
         let verificationSET = try await makeSET(issuer: issuer, events: [
             SSFEventTypes.verification: ["state": AnyCodable(state)]
-        ])
+        ], streamID: "stream-1")
         transmitter.deliverOnVerify(verificationSET)
 
         // A poll loop must be running to actually receive the event.
@@ -334,6 +340,39 @@ final class StreamLifecycleTests: XCTestCase {
         let event = try await receiver.verifyStreamAndAwaitEvent(id: "stream-1", state: state, timeout: 10)
         XCTAssertEqual(event.state, state)
         XCTAssertEqual(transmitter.verifyCount, 1)
+    }
+
+    func testVerifyStreamAndAwaitEventIgnoresOtherStreamsEvent() async throws {
+        let transmitter = MockTransmitter()
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+        let issuer = transmitter.baseURL
+        let pollEndpoint = issuer.appendingPathComponent("poll")
+
+        // A verification event with a matching state but a DIFFERENT stream id
+        // must not satisfy a wait on "stream-1".
+        let state = "shared-state"
+        transmitter.deliverOnVerify(try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.verification: ["state": AnyCodable(state)]
+        ], streamID: "stream-2"))
+
+        let poller = await receiver.startPolling(
+            endpoint: pollEndpoint,
+            configuration: PollDeliveryConfiguration(pollInterval: 0.1),
+            eventHandler: RecordingEventHandler()
+        )
+        defer { Task { await poller.stop() } }
+
+        do {
+            _ = try await receiver.verifyStreamAndAwaitEvent(id: "stream-1", state: state, timeout: 1)
+            XCTFail("Expected timeout: the event named a different stream")
+        } catch let error as SSFError {
+            guard case .verificationTimeout = error else {
+                return XCTFail("Expected .verificationTimeout, got \(error)")
+            }
+        }
     }
 
     func testVerifyStreamAndAwaitEventTimesOut() async throws {

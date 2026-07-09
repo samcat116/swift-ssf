@@ -117,14 +117,29 @@ public struct StreamLifecycleEvent: Sendable {
     /// The framework event carried by the SET.
     public let payload: Payload
 
+    /// The `stream_id` the carrying SET identifies, taken from its opaque
+    /// `sub_id` (SSF identifies the stream a management event belongs to with an
+    /// opaque subject whose `id` is the `stream_id`). `nil` when the SET carries
+    /// no such subject. Used to correlate an event to a specific stream.
+    public let streamID: String?
+
     /// The poll delivery endpoint the carrying SET arrived on, or `nil` when the
     /// SET was received by push or processed directly with no poll context.
     /// Poll-based reactors use this to match events to their own stream.
     public let pollEndpoint: URL?
 
-    public init(payload: Payload, pollEndpoint: URL? = nil) {
+    public init(payload: Payload, streamID: String? = nil, pollEndpoint: URL? = nil) {
         self.payload = payload
+        self.streamID = streamID
         self.pollEndpoint = pollEndpoint
+    }
+}
+
+extension SubjectIdentifier {
+    /// The `stream_id` an SSF management SET names via its opaque `sub_id`
+    /// (`{"format":"opaque","id":"<stream_id>"}`), or `nil` for other subjects.
+    public var streamIdentifier: String? {
+        format == "opaque" ? string("id") : nil
     }
 }
 
