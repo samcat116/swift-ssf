@@ -409,6 +409,43 @@ final class StreamLifecycleTests: XCTestCase {
         XCTAssertFalse(handler.errors.isEmpty, "Ack failure during a status stop should be reported")
     }
 
+    func testRestartAfterStatusStopResumesCleanly() async throws {
+        let transmitter = MockTransmitter()
+        try await transmitter.start()
+        defer { Task { try? await transmitter.stop() } }
+
+        let receiver = makeReceiver(transmitter: transmitter)
+        let issuer = transmitter.baseURL
+        let pollEndpoint = issuer.appendingPathComponent("poll")
+
+        // First run: a paused status stops the poller.
+        transmitter.enqueue(try await makeSET(issuer: issuer, events: [
+            SSFEventTypes.streamUpdated: ["status": AnyCodable("paused")]
+        ]))
+        let handler = RecordingEventHandler()
+        let poller = await receiver.startPolling(
+            endpoint: pollEndpoint,
+            configuration: PollDeliveryConfiguration(pollInterval: 0.1),
+            eventHandler: handler
+        )
+        defer { Task { await poller.stop() } }
+
+        try await waitFor(timeout: 5) { await poller.stoppedByTransmitterStatus == .paused }
+        let countAfterStop = handler.events.count
+
+        // Restart per the documented recovery path and deliver a normal event;
+        // the fresh loop should pick it up and the stopped status should clear.
+        transmitter.enqueue(try await makeSET(issuer: issuer, events: [CAEPEventTypes.sessionRevoked: [:]]))
+        await poller.start()
+
+        try await waitFor(timeout: 5) { handler.events.count > countAfterStop }
+
+        let running = await poller.running
+        let stoppedBy = await poller.stoppedByTransmitterStatus
+        XCTAssertTrue(running, "Poller should be running again after restart")
+        XCTAssertNil(stoppedBy, "Restart should clear the stopped status")
+    }
+
     func testPollDeliveryStopsOnStreamDisabled() async throws {
         let transmitter = MockTransmitter()
         try await transmitter.start()

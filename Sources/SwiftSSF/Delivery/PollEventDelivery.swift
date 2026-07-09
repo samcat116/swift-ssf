@@ -97,6 +97,13 @@ public actor PollEventDelivery {
     /// it is running or after a manual `stop()`.
     private var stoppedStatus: StreamStatus?
 
+    /// Identifies the currently-active poll loop / observer. Each `start()`
+    /// begins a new generation, and any stop (manual or status-triggered)
+    /// advances it. A loop only keeps running while its captured generation is
+    /// still current, so a stopped loop won't survive a quick `start()` that
+    /// happens before it observes the stop.
+    private var generation = 0
+
     /// - Parameter endpoint: the stream's poll delivery endpoint
     ///   (`delivery.endpoint_url` from the stream configuration)
     public init(
@@ -121,6 +128,8 @@ public actor PollEventDelivery {
         isRunning = true
         stoppedStatus = nil
         consecutiveErrors = 0
+        generation += 1
+        let generation = self.generation
 
         logger.info("Starting poll-based event delivery from \(endpoint)")
 
@@ -129,12 +138,12 @@ public actor PollEventDelivery {
         if configuration.reactToStreamStatus {
             let events = await receiver.lifecycleEvents()
             statusObserverTask = Task {
-                await observeStreamStatus(events)
+                await observeStreamStatus(events, generation: generation)
             }
         }
 
         pollTask = Task {
-            await runPollingLoop()
+            await runPollingLoop(generation: generation)
         }
     }
 
@@ -150,10 +159,12 @@ public actor PollEventDelivery {
         teardown()
     }
 
-    /// Cancel the poll loop and status observer. Leaves `stoppedStatus` intact
-    /// so callers can tell an auto-stop from a manual one.
+    /// Cancel the poll loop and status observer. Advances the generation so any
+    /// task that outlives the cancel exits, and leaves `stoppedStatus` intact so
+    /// callers can tell an auto-stop from a manual one.
     private func teardown() {
         isRunning = false
+        generation += 1
         pollTask?.cancel()
         pollTask = nil
         statusObserverTask?.cancel()
@@ -181,8 +192,8 @@ public actor PollEventDelivery {
 
     // MARK: - Private Methods
 
-    private func runPollingLoop() async {
-        while isRunning && !Task.isCancelled {
+    private func runPollingLoop(generation: Int) async {
+        while self.generation == generation && !Task.isCancelled {
             do {
                 let result = try await receiver.pollEvents(
                     endpoint: endpoint,
@@ -201,10 +212,10 @@ public actor PollEventDelivery {
                     logger.debug("Poll cycle processed \(result.processed) events, \(result.failed) failures")
                 }
 
-                // The status observer may have requested a graceful stop while
-                // this poll was handling/acking its SETs. Exit now the ack is
-                // done, without polling again.
-                if !isRunning { break }
+                // A graceful stop (or a restart that superseded us) advanced the
+                // generation while this poll was handling/acking its SETs. Exit
+                // now the ack is done, without polling again.
+                if self.generation != generation { break }
 
                 // Drain immediately while the transmitter has more events
                 if result.moreAvailable {
@@ -261,9 +272,11 @@ public actor PollEventDelivery {
     /// Watch the receiver's lifecycle events and stop polling when the
     /// transmitter reports this stream `paused` or `disabled`, so we don't keep
     /// hitting a stream that won't deliver events.
-    private func observeStreamStatus(_ events: AsyncStream<StreamLifecycleEvent>) async {
+    private func observeStreamStatus(_ events: AsyncStream<StreamLifecycleEvent>, generation: Int) async {
         for await event in events {
-            if Task.isCancelled || !isRunning { break }
+            // Stop observing once a newer generation has taken over (or we were
+            // cancelled), so a stale observer never stops a fresh poll loop.
+            if Task.isCancelled || self.generation != generation { break }
 
             // Only react to status changes delivered on our own poll endpoint.
             guard event.pollEndpoint == endpoint,
@@ -279,9 +292,11 @@ public actor PollEventDelivery {
                 // Request a graceful stop rather than cancelling the in-flight
                 // poll: the SET carrying this status is broadcast before it is
                 // handled and acked, so cancelling now would abort its ack and
-                // let the transmitter redeliver it. Clearing isRunning makes the
-                // poll loop exit after its current cycle completes.
+                // let the transmitter redeliver it. Advancing the generation
+                // makes the current poll loop exit after its cycle completes,
+                // and prevents this stop from ever affecting a later restart.
                 isRunning = false
+                self.generation += 1
                 return
             case .enabled:
                 continue  // already polling; nothing to do
