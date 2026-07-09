@@ -21,6 +21,9 @@ public actor SSFHTTPClient {
     /// Whether this instance created (and therefore owns) its HTTPClient
     private let ownsHTTPClient: Bool
 
+    /// Default request timeout for the management API and immediate polls
+    public static let defaultTimeout: TimeAmount = .seconds(30)
+
     public init(baseURL: URL, authToken: String? = nil, httpClient: HTTPClient? = nil) {
         self.issuerURL = baseURL
         self.authToken = authToken
@@ -66,7 +69,8 @@ public actor SSFHTTPClient {
         _ method: HTTPMethod,
         url: URL,
         body: T,
-        responseType: U.Type
+        responseType: U.Type,
+        timeout: TimeAmount = SSFHTTPClient.defaultTimeout
     ) async throws -> U {
         var request = HTTPClientRequest(url: url.absoluteString)
         request.method = method
@@ -76,7 +80,7 @@ public actor SSFHTTPClient {
         let bodyData = try jsonEncoder.encode(body)
         request.body = .bytes(ByteBuffer(data: bodyData))
 
-        return try await performRequest(request, responseType: responseType)
+        return try await performRequest(request, responseType: responseType, timeout: timeout)
     }
 
     /// Perform a DELETE request against an absolute URL
@@ -164,9 +168,17 @@ public actor SSFHTTPClient {
 
     // MARK: - Event Polling (RFC 8936)
 
-    /// Poll for events: POST to the stream's delivery endpoint
-    public func pollEvents(endpoint: URL, _ request: PollRequest) async throws -> PollResponse {
-        return try await send(.POST, url: endpoint, body: request, responseType: PollResponse.self)
+    /// Poll for events: POST to the stream's delivery endpoint.
+    ///
+    /// For long polling (`returnImmediately: false`) pass a `timeout` that
+    /// comfortably exceeds the transmitter's hold time so the client doesn't
+    /// abort a connection the transmitter is legitimately holding open.
+    public func pollEvents(
+        endpoint: URL,
+        _ request: PollRequest,
+        timeout: TimeAmount = SSFHTTPClient.defaultTimeout
+    ) async throws -> PollResponse {
+        return try await send(.POST, url: endpoint, body: request, responseType: PollResponse.self, timeout: timeout)
     }
 
     // MARK: - Discovery (SSF 1.0 §7.1.1)
@@ -225,12 +237,13 @@ public actor SSFHTTPClient {
 
     private func performRequest<T: Codable>(
         _ request: HTTPClientRequest,
-        responseType: T.Type
+        responseType: T.Type,
+        timeout: TimeAmount = SSFHTTPClient.defaultTimeout
     ) async throws -> T {
         logger.debug("Performing \(request.method) request to \(request.url)")
 
         do {
-            let response = try await httpClient.execute(request, timeout: .seconds(30))
+            let response = try await httpClient.execute(request, timeout: timeout)
             try await handleErrorResponse(response)
 
             if T.self == EmptyResponse.self {
@@ -245,6 +258,11 @@ public actor SSFHTTPClient {
             throw error
         } catch let error as DecodingError {
             throw SSFError.jsonParsingError(error)
+        } catch let error as HTTPClientError where error == .deadlineExceeded {
+            // The request timeout elapsed. For long polling this is expected
+            // (the transmitter held the connection open with no events), so
+            // surface it as a distinct case delivery layers can special-case.
+            throw SSFError.connectionTimeout
         } catch {
             throw SSFError.networkError(error)
         }

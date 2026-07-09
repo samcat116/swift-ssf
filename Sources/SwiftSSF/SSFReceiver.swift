@@ -1,5 +1,6 @@
 import Foundation
 import AsyncHTTPClient
+import NIOCore
 import Crypto
 import Logging
 
@@ -235,11 +236,16 @@ public actor SSFReceiver {
     /// Successfully handled SETs are acknowledged (and failures reported via
     /// setErrs) with a follow-up ack-only request, so a crash between receipt
     /// and handling means redelivery rather than loss.
+    ///
+    /// - Parameter timeout: HTTP request timeout for the polling request. For
+    ///   long polling (`returnImmediately: false`) pass a value that exceeds
+    ///   the transmitter's hold time; the default suits immediate polls.
     @discardableResult
     public func pollEvents(
         endpoint: URL,
         maxEvents: Int = 100,
         returnImmediately: Bool = true,
+        timeout: TimeAmount = SSFHTTPClient.defaultTimeout,
         handler: SSFEventHandler
     ) async throws -> PollResult {
         logger.debug("Polling events from \(endpoint)")
@@ -247,7 +253,7 @@ public actor SSFReceiver {
         let response = try await httpClient.pollEvents(endpoint: endpoint, PollRequest(
             maxEvents: maxEvents,
             returnImmediately: returnImmediately
-        ))
+        ), timeout: timeout)
 
         var acks: [String] = []
         var errs: [String: SETErrorStatus] = [:]
@@ -289,6 +295,7 @@ public actor SSFReceiver {
         stream: StreamConfiguration,
         maxEvents: Int = 100,
         returnImmediately: Bool = true,
+        timeout: TimeAmount = SSFHTTPClient.defaultTimeout,
         handler: SSFEventHandler
     ) async throws -> PollResult {
         guard let delivery = stream.delivery, delivery.method == .poll,
@@ -300,6 +307,7 @@ public actor SSFReceiver {
             endpoint: endpoint,
             maxEvents: maxEvents,
             returnImmediately: returnImmediately,
+            timeout: timeout,
             handler: handler
         )
     }

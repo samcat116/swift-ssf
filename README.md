@@ -36,6 +36,18 @@ print("Processed \(result.processed) events")
 
 // ...or continuously
 let poller = try await receiver.startPolling(stream: stream, eventHandler: LoggingEventHandler())
+
+// For long polling (RFC 8936), the transmitter holds the request open until
+// events arrive. Disable returnImmediately and give the request a timeout that
+// exceeds the transmitter's hold time; a timeout is treated as an empty poll.
+let longPoller = try await receiver.startPolling(
+    stream: stream,
+    configuration: PollDeliveryConfiguration(
+        returnImmediately: false,
+        longPollTimeout: 300   // seconds; should exceed the transmitter hold time
+    ),
+    eventHandler: LoggingEventHandler()
+)
 ```
 
 For push delivery, run the built-in RFC 8935 endpoint and hand its URL to the transmitter:
